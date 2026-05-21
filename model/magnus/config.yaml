@@ -1,0 +1,36 @@
+# Magnus — Configuraões de Treino
+# GPU alvo: A100 (Google Colab pago / RunPod / Lambda Labs)
+# Custo estimado por sessão de treino: R$15-25 (RunPod A100)
+
+model: rtdetr-x.pt         # RT-DETR extra-large (~67M params)
+                           # upgrade para Swin-B backbone = ~100M
+epochs: 150
+imgsz: 1280                # alta resolução para grãos pequenos
+batch: 8                   # A100 80GB consegue batch=8 com 1280px
+patience: 30
+device: 0
+project: soja-inspection
+name: magnus-v1
+
+# Augmentation pesado (mais dados sintéticos)
+mosaic: 1.0
+mixup: 0.3                 # mais agressivo que Sinnet
+copy_paste: 0.2            # copia grãos entre imagens
+flipud: 0.2
+fliplr: 0.5
+hsv_h: 0.02
+hsv_s: 0.8
+hsv_v: 0.5
+blur: 0.1                  # simula desfoque de movimento
+
+# Otimizador
+optimizer: AdamW
+lr0: 0.0001                # LR menor para transformer
+lrf: 0.001
+weight_decay: 0.0001
+warmup_epochs: 5
+
+# Meta de qualidade
+# mAP50 alvo: > 0.91
+# Tempo de inferência alvo: < 15ms/imagem (A100)
+# Requisição Escopo 3: < 5ms com TensorRT no Jetson AGX
