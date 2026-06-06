@@ -2,15 +2,21 @@
 __pycache__/
 *.py[cod]
 *.so
-.venv/
-venv/
-dist/
-build/
 *.egg-info/
 .mypy_cache/
-runs/
+.venv/
+venv/
+env/
+dist/
+build/
+
+# Model weights (too large for git — upload manually to HF Space)
+*.keras
+*.h5
 *.pt
+*.pth
 *.onnx
+runs/
 
 # Node
 node_modules/
@@ -19,12 +25,17 @@ node_modules/
 out/
 *.tsbuildinfo
 
-# Env files
+# Environment variables
 .env
 .env.local
 .env.production
 !.env.example
 !.env.local.example
+
+# Dataset (kept in Google Drive)
+dataset/
+data/
+*.zip
 
 # OS
 .DS_Store
