@@ -47,14 +47,40 @@ def _predict(crop: np.ndarray):
 
 
 # ── Mode 1: single grain ─────────────────────────────────────────────
+def _crop_single_grain(arr: np.ndarray) -> np.ndarray:
+    """Detect the largest object in the image and return a tight crop.
+    Falls back to the full image if no clear grain is found."""
+    h, w = arr.shape[:2]
+    gray    = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,  kernel, iterations=1)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return arr
+    largest = max(contours, key=cv2.contourArea)
+    area    = cv2.contourArea(largest)
+    # ignore if grain fills too little (<2%) or too much (>95%) of the image
+    if not (0.02 < area / (h * w) < 0.95):
+        return arr
+    x, y, bw, bh = cv2.boundingRect(largest)
+    pad = max(15, int(min(bw, bh) * 0.12))
+    x1, y1 = max(0, x - pad), max(0, y - pad)
+    x2, y2 = min(w, x + bw + pad), min(h, y + bh + pad)
+    return arr[y1:y2, x1:x2]
+
+
 def classify_single(image: Image.Image):
     if image is None:
         return "Nenhuma imagem recebida.", {}
 
-    arr           = np.array(image.convert("RGB"))
-    idx, conf, pv = _predict(arr)
-    pt_label      = PT_LABELS[CLASS_NAMES[idx]]
-    label_str     = f"{pt_label} — {conf:.1%}"
+    arr       = np.array(image.convert("RGB"))
+    crop      = _crop_single_grain(arr)   # remove fundo antes de classificar
+    idx, conf, pv = _predict(crop)
+    pt_label  = PT_LABELS[CLASS_NAMES[idx]]
+    label_str = f"{pt_label} — {conf:.1%}"
 
     probs = {PT_LABELS[CLASS_NAMES[i]]: float(pv[i]) for i in range(len(CLASS_NAMES))}
     return label_str, probs
