@@ -40,7 +40,7 @@ CLASS_COLORS = [
 IMG_SIZE = (224, 224)
 
 CORRECTIONS_REPO = os.getenv("CORRECTIONS_DATASET_REPO", "Guguinhaxd/soja-corrections")
-HF_TOKEN         = os.getenv("HF_TOKEN", None)
+HF_TOKEN         = os.getenv("SOJA_CORRECTIONS", None)
 
 
 # ── Core helpers ─────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ def save_correction(image: Image.Image, correct_pt_label: str):
     if not correct_pt_label:
         return "Selecione a classe correta antes de enviar."
     if not HF_TOKEN:
-        return "⚠️ HF_TOKEN não configurado no Space. Contate o administrador."
+        return "⚠️ Secret SOJA_CORRECTIONS não configurado no Space. Contate o administrador."
 
     try:
         correct_class = PT_TO_CLASS[correct_pt_label]
