@@ -225,7 +225,10 @@ with gr.Blocks(title="Classificador de Grãos de Soja") as demo:
             gr.Markdown("### Resultado errado?")
             gr.Markdown(
                 "Se o modelo errou, selecione a classe correta abaixo e clique em **Enviar correção**. "
-                "A imagem é salva automaticamente no dataset de treino para melhorar o modelo."
+                "A imagem é salva automaticamente no dataset de treino para melhorar o modelo.\n\n"
+                "💡 **Coleta rápida:** para juntar muitas fotos de uma classe, selecione a classe "
+                "uma vez e fique tirando foto + **Enviar correção** em sequência — a foto limpa "
+                "sozinha após cada envio (não precisa clicar em Classificar)."
             )
             with gr.Row():
                 correction_dd  = gr.Dropdown(
@@ -236,10 +239,16 @@ with gr.Blocks(title="Classificador de Grãos de Soja") as demo:
                 correction_btn = gr.Button("Enviar correção", variant="secondary")
             correction_status = gr.Textbox(label="Status da correção", interactive=False)
 
+            # Após enviar, limpa só a FOTO (mantém a classe selecionada).
+            # Permite coletar muitos grãos da mesma classe em sequência rápida:
+            # seleciona a classe uma vez → snap → enviar → snap → enviar...
             correction_btn.click(
                 save_correction,
                 inputs=[inp1, correction_dd],
                 outputs=[correction_status],
+            ).then(
+                lambda: None,
+                outputs=[inp1],
             )
 
         # ── Aba 2: Vários grãos ───────────────────────────────────────
