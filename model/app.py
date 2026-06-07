@@ -87,8 +87,11 @@ def save_correction(image: Image.Image, correct_pt_label: str):
 
     try:
         correct_class = PT_TO_CLASS[correct_pt_label]
+        # Salva o grão JÁ RECORTADO — mesmo preprocessamento da classificação.
+        # Garante que o fine-tuning treine no mesmo enquadramento que o modelo vê em produção.
+        cropped = _crop_single_grain(np.array(image.convert("RGB")))
         buf = io.BytesIO()
-        image.convert("RGB").save(buf, format="JPEG", quality=92)
+        Image.fromarray(cropped).save(buf, format="JPEG", quality=92)
         buf.seek(0)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
