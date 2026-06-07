@@ -39,7 +39,7 @@ CLASS_COLORS = [
 
 IMG_SIZE = (224, 224)
 
-CORRECTIONS_REPO = os.getenv("CORRECTIONS_DATASET_REPO", "Guguinhaxd/soja-corrections")
+CORRECTIONS_REPO = os.getenv("CORRECTIONS_DATASET_REPO", "Guguinhaxd/soja-correction")
 HF_TOKEN         = os.getenv("SOJA_CORRECTIONS", None)
 
 
