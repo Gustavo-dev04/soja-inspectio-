@@ -1,7 +1,8 @@
 import io
 import os
 import json
-import uuid
+import glob
+import hashlib
 import numpy as np
 import cv2
 import gradio as gr
@@ -55,8 +56,12 @@ def _predict(crop: np.ndarray):
     return idx, float(pred[idx]), pred
 
 
-def _crop_single_grain(arr: np.ndarray) -> np.ndarray:
-    """Detect the largest object and return a tight crop (falls back to full image)."""
+def _crop_single_grain(arr: np.ndarray):
+    """Detect the largest object and return (crop, found).
+
+    found=False means no usable grain was detected (no contour or too small) —
+    callers that feed the training dataset must NOT save in that case.
+    """
     h, w    = arr.shape[:2]
     gray    = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
@@ -66,13 +71,16 @@ def _crop_single_grain(arr: np.ndarray) -> np.ndarray:
     thresh  = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,  kernel, iterations=1)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        return arr
+        return arr, False
     largest = max(contours, key=cv2.contourArea)
-    if not (0.02 < cv2.contourArea(largest) / (h * w) < 0.95):
-        return arr
+    ratio   = cv2.contourArea(largest) / (h * w)
+    if ratio <= 0.02:
+        return arr, False           # só ruído — nenhum grão de verdade
+    if ratio >= 0.95:
+        return arr, True            # imagem já é o grão enquadrado
     x, y, bw, bh = cv2.boundingRect(largest)
     pad = max(15, int(min(bw, bh) * 0.12))
-    return arr[max(0, y-pad):min(h, y+bh+pad), max(0, x-pad):min(w, x+bw+pad)]
+    return arr[max(0, y-pad):min(h, y+bh+pad), max(0, x-pad):min(w, x+bw+pad)], True
 
 
 # ── Feedback / active learning ────────────────────────────────────────
@@ -89,16 +97,28 @@ def save_correction(image: Image.Image, correct_pt_label: str):
         correct_class = PT_TO_CLASS[correct_pt_label]
         # Salva o grão JÁ RECORTADO — mesmo preprocessamento da classificação.
         # Garante que o fine-tuning treine no mesmo enquadramento que o modelo vê em produção.
-        cropped = _crop_single_grain(np.array(image.convert("RGB")))
+        cropped, found = _crop_single_grain(np.array(image.convert("RGB")))
+        if not found:
+            return ("❌ Nenhum grão detectado na foto — correção NÃO salva. "
+                    "Use fundo escuro e deixe o grão bem visível.")
+        if cropped.shape[0] < 50 or cropped.shape[1] < 50:
+            return ("❌ Grão muito pequeno na foto (recorte < 50×50 px) — "
+                    "aproxime a câmera e tente de novo.")
+
         buf = io.BytesIO()
         Image.fromarray(cropped).save(buf, format="JPEG", quality=92)
         buf.seek(0)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        uid       = uuid.uuid4().hex[:8]
-        path      = f"{correct_class}/{timestamp}_{uid}.jpg"
+        # Nome = hash MD5 do conteúdo → mesmo grão enviado 2x cai no mesmo path
+        md5  = hashlib.md5(buf.getvalue()).hexdigest()
+        path = f"{correct_class}/{md5}.jpg"
 
-        HfApi(token=HF_TOKEN).upload_file(
+        api = HfApi(token=HF_TOKEN)
+        if api.file_exists(CORRECTIONS_REPO, path, repo_type="dataset"):
+            return "⚠️ Esta imagem já está no dataset (duplicada) — não salvei de novo."
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        api.upload_file(
             path_or_fileobj=buf,
             path_in_repo=path,
             repo_id=CORRECTIONS_REPO,
@@ -115,11 +135,94 @@ def classify_single(image: Image.Image):
     if image is None:
         return "Nenhuma imagem recebida.", {}
     arr           = np.array(image.convert("RGB"))
-    crop          = _crop_single_grain(arr)
+    crop, _found  = _crop_single_grain(arr)
     idx, conf, pv = _predict(crop)
     pt_label      = PT_LABELS[CLASS_NAMES[idx]]
     probs         = {PT_LABELS[CLASS_NAMES[i]]: float(pv[i]) for i in range(len(CLASS_NAMES))}
     return f"{pt_label} — {conf:.1%}", probs
+
+
+# ── Status do sistema ─────────────────────────────────────────────────
+def get_status() -> str:
+    """Versão do modelo, correções acumuladas e última avaliação registrada."""
+    lines = []
+
+    try:
+        mtime = datetime.fromtimestamp(os.path.getmtime(MODEL_PATH))
+        size  = os.path.getsize(MODEL_PATH) / 1e6
+        lines.append(f"Modelo: {MODEL_PATH} ({size:.0f} MB)")
+        lines.append(f"Atualizado em: {mtime:%d/%m/%Y %H:%M} UTC")
+    except OSError:
+        lines.append("Modelo: arquivo não encontrado!")
+
+    if HF_TOKEN:
+        try:
+            files = HfApi(token=HF_TOKEN).list_repo_files(
+                CORRECTIONS_REPO, repo_type="dataset")
+            imgs   = [f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+            treino = [f for f in imgs if not f.startswith("holdout/")]
+            hold   = [f for f in imgs if f.startswith("holdout/")]
+            lines.append(f"Correções acumuladas: {len(treino)} treino + {len(hold)} holdout")
+        except Exception as e:
+            lines.append(f"Correções: erro ao consultar dataset ({e})")
+    else:
+        lines.append("Correções: secret SOJA_CORRECTIONS não configurado")
+
+    evals = sorted(glob.glob("results/eval_*.json"))
+    if evals:
+        try:
+            with open(evals[-1]) as f:
+                ev = json.load(f)
+            lines.append(f"Última avaliação: {ev.get('timestamp', '?')}")
+            lines.append(f"  Holdout (fotos reais): {ev.get('baseline_holdout', 0):.0%}"
+                         f" → {ev.get('new_holdout', 0):.0%}")
+            lines.append(f"  Teste original (lab):  {ev.get('new_original', 0):.0%}")
+            per_cls = ev.get("per_class_holdout", {})
+            if per_cls:
+                detalhes = ", ".join(
+                    f"{k}: {v:.0%}" for k, v in per_cls.items() if v is not None)
+                lines.append(f"  Por classe: {detalhes}")
+        except Exception as e:
+            lines.append(f"Última avaliação: erro ao ler ({e})")
+    else:
+        lines.append("Última avaliação: nenhuma registrada ainda "
+                     "(roda o finetune.ipynb e a Célula 11 sobe o eval pra cá)")
+
+    return "\n".join(lines)
+
+
+def _split_touching(orig: np.ndarray, cnt) -> list:
+    """Separa grãos encostados (blob único) via watershed; devolve contornos individuais.
+
+    Roda só no ROI do contorno (barato em CPU). Se o distance transform achar
+    uma única semente, o blob era um grão só — devolve o contorno original.
+    """
+    x, y, bw, bh = cv2.boundingRect(cnt)
+    roi_mask = np.zeros((bh, bw), np.uint8)
+    cv2.drawContours(roi_mask, [cnt - np.array([[x, y]])], -1, 255, -1)
+
+    dist = cv2.distanceTransform(roi_mask, cv2.DIST_L2, 5)
+    _, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
+    sure_fg = sure_fg.astype(np.uint8)
+
+    n_seeds, markers = cv2.connectedComponents(sure_fg)
+    if n_seeds <= 2:                      # fundo + 1 semente → não era blob duplo
+        return [cnt]
+
+    markers = markers + 1                 # fundo=1, sementes=2..n
+    unknown = cv2.subtract(roi_mask, sure_fg)
+    markers[unknown == 255] = 0           # região incerta que o watershed resolve
+
+    roi_bgr = cv2.cvtColor(orig[y:y+bh, x:x+bw], cv2.COLOR_RGB2BGR)
+    markers = cv2.watershed(roi_bgr, markers)
+
+    pieces = []
+    for m in range(2, n_seeds + 1):
+        seg = np.where((markers == m) & (roi_mask > 0), 255, 0).astype(np.uint8)
+        cs, _ = cv2.findContours(seg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cs:
+            pieces.append(c + np.array([[x, y]]))
+    return pieces if pieces else [cnt]
 
 
 # ── Mode 2: multi-grain ───────────────────────────────────────────────
@@ -144,7 +247,25 @@ def segment_and_classify(image: Image.Image, conf_threshold: float = 0.6):
     class_count = {PT_LABELS[n]: 0 for n in CLASS_NAMES}
     total       = 0
 
-    for cnt in contours:
+    # Watershed condicional: blobs com área > 1.8× a mediana dos DEMAIS contornos
+    # são suspeitos de conter 2+ grãos encostados e passam pela separação; o resto
+    # segue direto (mais barato em CPU). Mediana leave-one-out: com poucos grãos no
+    # frame, a mediana global seria puxada pelo próprio blob e o gatilho falharia.
+    # Contorno sozinho no frame é sempre suspeito (o contador de sementes interno
+    # do watershed decide se separa). Filtro de área reaplicado APÓS a separação.
+    pre = [c for c in contours if min_area < cv2.contourArea(c) < max_area]
+    final_contours = []
+    if pre:
+        areas = np.array([cv2.contourArea(c) for c in pre])
+        for i, c in enumerate(pre):
+            others  = np.delete(areas, i)
+            suspect = len(others) == 0 or areas[i] > 1.8 * float(np.median(others))
+            if suspect:
+                final_contours.extend(_split_touching(orig, c))
+            else:
+                final_contours.append(c)
+
+    for cnt in final_contours:
         area = cv2.contourArea(cnt)
         if not (min_area < area < max_area):
             continue
@@ -308,5 +429,12 @@ with gr.Blocks(title="Classificador de Grãos de Soja") as demo:
                 - **Segmentação:** OpenCV (grayscale → Otsu threshold → findContours)
                 """
             )
+
+        # ── Aba 4: Status ─────────────────────────────────────────────
+        with gr.Tab("Status"):
+            gr.Markdown("## Status do sistema\nVersão do modelo, correções acumuladas e última avaliação.")
+            status_btn = gr.Button("Atualizar status", variant="secondary")
+            status_out = gr.Textbox(label="Status", lines=10, interactive=False)
+            status_btn.click(get_status, inputs=[], outputs=[status_out])
 
 demo.launch()
