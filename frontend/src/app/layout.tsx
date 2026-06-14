@@ -4,8 +4,8 @@ import InspectionLogo from "@/components/InspectionLogo";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Inspeção de Soja",
-  description: "Inspeção visual de grãos de soja com YOLO11",
+  title: "Vígil — Inspeção de Soja",
+  description: "Vígil: inspeção visual de grãos de soja com YOLO11",
 };
 
 export default function RootLayout({
@@ -21,7 +21,10 @@ export default function RootLayout({
             <Link href="/" className="flex items-center gap-2.5">
               <InspectionLogo className="w-6 text-neutral-200" />
               <span className="text-sm font-medium tracking-tight text-neutral-100">
-                Inspeção de Soja
+                Vígil
+              </span>
+              <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-neutral-500">
+                beta
               </span>
             </Link>
             <div className="ml-auto flex items-center gap-5 text-sm">

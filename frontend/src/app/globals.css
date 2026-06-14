@@ -39,9 +39,80 @@ body {
   animation: spin-cw 7s linear infinite;
 }
 
+/* ——— abertura (intro) ——— */
+.logo-intro {
+  animation: logo-pop 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes logo-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.82) rotate(-12deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.intro-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: logo-draw 0.9s ease forwards;
+}
+@keyframes logo-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.intro-fade {
+  opacity: 0;
+  animation: logo-fade 0.5s ease forwards;
+}
+@keyframes logo-fade {
+  to {
+    opacity: 1;
+  }
+}
+
+.intro-word,
+.intro-word-2 {
+  opacity: 0;
+  animation: word-up 0.7s ease forwards;
+}
+.intro-word {
+  animation-delay: 0.85s;
+}
+.intro-word-2 {
+  animation-delay: 1.15s;
+}
+@keyframes word-up {
+  from {
+    opacity: 0;
+    transform: translateY(0.7em);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spin-fast,
-  .spin-slow {
+  .spin-slow,
+  .logo-intro,
+  .intro-draw,
+  .intro-fade,
+  .intro-word,
+  .intro-word-2 {
     animation: none;
+  }
+  .intro-draw {
+    stroke-dashoffset: 0;
+  }
+  .intro-fade,
+  .intro-word,
+  .intro-word-2 {
+    opacity: 1;
   }
 }
