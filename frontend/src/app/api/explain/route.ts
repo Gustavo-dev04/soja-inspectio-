@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+// LLM via API compatível com OpenAI. Default: Groq + Llama 3.3 70b (grátis, rápido).
+// Trocável por env sem mexer no código.
 const ENDPOINT =
-  process.env.GITHUB_MODELS_ENDPOINT ??
-  "https://models.github.ai/inference/chat/completions";
-const MODEL = process.env.PHI_MODEL ?? "microsoft/Phi-4-mini-instruct";
+  process.env.LLM_ENDPOINT ?? "https://api.groq.com/openai/v1/chat/completions";
+const MODEL = process.env.LLM_MODEL ?? "llama-3.3-70b-versatile";
 
 const CLASS_PT: Record<string, string> = {
   intact: "Intacto",
@@ -50,10 +51,10 @@ interface ExplainBody {
 }
 
 export async function POST(req: NextRequest) {
-  const token = process.env.GITHUB_MODELS_TOKEN;
+  const token = process.env.GROQ_API_KEY ?? process.env.LLM_API_KEY;
   if (!token) {
     return NextResponse.json(
-      { detail: "GITHUB_MODELS_TOKEN não configurada" },
+      { detail: "GROQ_API_KEY não configurada" },
       { status: 503 }
     );
   }
@@ -105,7 +106,7 @@ export async function POST(req: NextRequest) {
     });
   } catch {
     return NextResponse.json(
-      { detail: "Falha ao contatar o GitHub Models" },
+      { detail: "Falha ao contatar o provedor de LLM" },
       { status: 502 }
     );
   }
@@ -113,7 +114,7 @@ export async function POST(req: NextRequest) {
   if (!resp.ok) {
     const errText = await resp.text().catch(() => "");
     return NextResponse.json(
-      { detail: `GitHub Models retornou ${resp.status}: ${errText.slice(0, 200)}` },
+      { detail: `LLM retornou ${resp.status}: ${errText.slice(0, 200)}` },
       { status: 502 }
     );
   }

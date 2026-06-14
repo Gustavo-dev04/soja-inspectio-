@@ -9,18 +9,12 @@ services:
     dockerfilePath: ./Dockerfile
     plan: starter # 'free' hiberna; YOLO+torch costuma exigir 'starter' (512MB+)
     healthCheckPath: /health
+    # O modelo soja_yolo11s_finetuned.pt fica embutido na imagem (backend/), então
+    # não há download no boot. As HF_* abaixo são só fallback se o .pt sumir.
     envVars:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: HF_MODEL_REPO
-        value: Guguinhaxd/soja-inspection
-      - key: HF_MODEL_REPO_TYPE
-        value: space
-      - key: HF_MODEL_FILE
-        value: soja_yolo11s_finetuned.pt
-      - key: HF_TOKEN
-        sync: false # só necessário se o Space for privado
       - key: CORS_ORIGIN
         sync: false # ex.: https://soja-inspection.vercel.app
