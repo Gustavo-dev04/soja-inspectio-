@@ -1,5 +1,9 @@
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
+# torch fixado <2.6: o ultralytics 8.2.0 nao allowlista os globals que o
+# torch>=2.6 exige com weights_only=True (carga do .pt falhava no startup).
+torch==2.2.2
+torchvision==0.17.2
 ultralytics==8.2.0
 supabase==2.4.2
 huggingface_hub==0.23.4
