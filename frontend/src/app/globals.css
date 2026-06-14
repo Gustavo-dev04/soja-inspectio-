@@ -1,3 +1,47 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+/* fundo preto sofisticado com um leve halo radial no topo */
+body {
+  background:
+    radial-gradient(
+      80rem 50rem at 50% -10%,
+      rgba(22, 163, 74, 0.07),
+      transparent 60%
+    ),
+    #0a0a0b;
+  background-attachment: fixed;
+}
+
+/* giro horário — palitinhos rápidos, íris lenta (sensação de varredura) */
+@keyframes spin-cw {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin-fast,
+.spin-slow {
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.spin-fast {
+  animation: spin-cw 1.8s linear infinite;
+}
+
+.spin-slow {
+  animation: spin-cw 7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin-fast,
+  .spin-slow {
+    animation: none;
+  }
+}
