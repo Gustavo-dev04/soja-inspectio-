@@ -1,6 +1,4 @@
 ultralytics==8.4.67
-gradio==6.17.3
 opencv-python-headless==4.13.0.92
 Pillow==12.2.0
-numpy==2.4.6
 huggingface_hub==1.18.0
