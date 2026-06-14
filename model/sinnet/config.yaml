@@ -1,0 +1,30 @@
+# Sinnet — Configurações de Treino
+# GPU alvo: T4 gratuita (Google Colab free tier)
+
+model: yolov8s.pt          # backbone: YOLOv8 small (~11M params)
+epochs: 100
+imgsz: 640
+batch: 32                  # cabe na T4 (16GB VRAM)
+patience: 20               # early stopping
+device: 0                  # GPU 0
+project: soja-inspection
+name: sinnet-v1
+
+# Augmentation
+mosaic: 1.0
+mixup: 0.1
+flipud: 0.1
+fliplr: 0.5
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+
+# Otimizador
+optimizer: AdamW
+lr0: 0.001
+lrf: 0.01
+weight_decay: 0.0005
+
+# Meta de qualidade
+# mAP50 alvo: > 0.85
+# Tempo de inferência alvo: < 8ms/imagem (GPU)

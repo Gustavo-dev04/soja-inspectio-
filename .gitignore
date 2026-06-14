@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.mypy_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+
+# Model weights (too large for git — upload manually to HF Space)
+*.keras
+*.h5
+*.pt
+*.pth
+# Exceção: o modelo do deploy fica embutido na imagem Docker do backend (10MB, ok no git)
+!backend/soja_yolo11s_finetuned.pt
+*.onnx
+runs/
+
+# Node
+node_modules/
+.next/
+.vercel/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment variables
+.env
+.env.local
+.env.production
+!.env.example
+!.env.local.example
+
+# Dataset (kept in Google Drive)
+dataset/
+data/
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db

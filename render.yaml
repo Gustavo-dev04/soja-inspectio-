@@ -1,0 +1,20 @@
+# Render Blueprint — backend de visão (YOLO11s-cls + OpenCV).
+# O frontend Next.js vai pra Vercel; este serviço cuida só do /inspect.
+# No painel do Render: New > Blueprint > aponte pra este repo.
+services:
+  - type: web
+    name: soja-inspection-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: starter # 'free' hiberna; YOLO+torch costuma exigir 'starter' (512MB+)
+    healthCheckPath: /health
+    # O modelo soja_yolo11s_finetuned.pt fica embutido na imagem (backend/), então
+    # não há download no boot. As HF_* abaixo são só fallback se o .pt sumir.
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false # ex.: https://soja-inspection.vercel.app

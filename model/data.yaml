@@ -1,0 +1,13 @@
+# Configuração do dataset YOLO para Inspeção de Soja
+path: ./datasets/soja
+train: images/train
+val:   images/val
+test:  images/test
+
+nc: 5
+names:
+  - soja_boa
+  - soja_verde
+  - soja_meia_lua
+  - soja_ardida
+  - soja_quebrada
