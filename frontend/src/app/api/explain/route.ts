@@ -1,0 +1,130 @@
+import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+
+const ENDPOINT =
+  process.env.GITHUB_MODELS_ENDPOINT ??
+  "https://models.github.ai/inference/chat/completions";
+const MODEL = process.env.PHI_MODEL ?? "microsoft/Phi-4-mini-instruct";
+
+const CLASS_PT: Record<string, string> = {
+  intact: "Intacto",
+  immature: "Imaturo (verde)",
+  broken: "Quebrado",
+  "skin-damaged": "Casca danificada",
+  spotted: "Manchado",
+};
+
+const SUGESTOES: Record<string, string[]> = {
+  immature: [
+    "Como evitar grãos imaturos na colheita?",
+    "Qual o impacto comercial do grão imaturo?",
+    "Como identificar o ponto certo de colheita?",
+  ],
+  broken: [
+    "Por que os grãos quebram durante a colheita?",
+    "Como reduzir perdas por quebra?",
+    "Qual % de quebra é tolerado pela CONAB?",
+  ],
+  "skin-damaged": [
+    "O que causa danos à casca do grão?",
+    "Como prevenir danos na colheita e transporte?",
+    "Grão com casca danificada pode ser comercializado?",
+  ],
+  spotted: [
+    "O que causa manchas nos grãos de soja?",
+    "Manchas indicam contaminação fúngica?",
+    "Como tratar grãos manchados no armazenamento?",
+  ],
+  intact: [
+    "Como manter os grãos íntegros durante a colheita?",
+    "Quais cuidados no armazenamento?",
+    "Como a qualidade é avaliada no mercado?",
+  ],
+};
+
+interface ExplainBody {
+  classe: string;
+  pergunta?: string;
+  modo?: "academico" | "industrial";
+}
+
+export async function POST(req: NextRequest) {
+  const token = process.env.GITHUB_MODELS_TOKEN;
+  if (!token) {
+    return NextResponse.json(
+      { detail: "GITHUB_MODELS_TOKEN não configurada" },
+      { status: 503 }
+    );
+  }
+
+  let body: ExplainBody;
+  try {
+    body = (await req.json()) as ExplainBody;
+  } catch {
+    return NextResponse.json({ detail: "JSON inválido" }, { status: 422 });
+  }
+
+  const { classe, pergunta, modo = "academico" } = body;
+  const classePt = CLASS_PT[classe] ?? classe;
+
+  const modoInstrucao =
+    modo === "academico"
+      ? "Use linguagem técnico-científica. Mencione processos fisiológicos, impactos nutricionais e parâmetros de qualidade segundo normas do MAPA. Resposta em até 4 parágrafos."
+      : "Seja direto e objetivo. Foque em impacto comercial, tolerâncias da Tabela de Classificação MAPA/CONAB e ações corretivas imediatas no campo ou silo. Resposta em até 3 parágrafos curtos.";
+
+  const perguntaFinal =
+    pergunta ??
+    `Por que o grão de soja está classificado como '${classePt}' e quais são as principais causas?`;
+
+  const system =
+    "Você é um especialista em agronomia com foco em produção e qualidade de grãos de soja. " +
+    "Responda sempre em português brasileiro. " +
+    modoInstrucao;
+
+  let resp: Response;
+  try {
+    resp = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: system },
+          {
+            role: "user",
+            content: `Grão classificado como: ${classePt}. Pergunta: ${perguntaFinal}`,
+          },
+        ],
+        max_tokens: 512,
+        temperature: 0.4,
+      }),
+    });
+  } catch {
+    return NextResponse.json(
+      { detail: "Falha ao contatar o GitHub Models" },
+      { status: 502 }
+    );
+  }
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    return NextResponse.json(
+      { detail: `GitHub Models retornou ${resp.status}: ${errText.slice(0, 200)}` },
+      { status: 502 }
+    );
+  }
+
+  const data = (await resp.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const resposta = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+  return NextResponse.json({
+    resposta,
+    sugestoes: SUGESTOES[classe] ?? [],
+  });
+}

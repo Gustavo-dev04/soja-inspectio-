@@ -14,11 +14,27 @@ _model: YOLO | None = None
 _yolo_to_ours: list[int] | None = None
 
 
+def _resolve_model_path() -> str:
+    """Usa o .pt local se existir; senão baixa do HF Space (Render não tem o peso no repo)."""
+    path = os.getenv("MODEL_PATH", "soja_yolo11s_finetuned.pt")
+    if os.path.exists(path):
+        return path
+
+    from huggingface_hub import hf_hub_download
+
+    repo_id = os.getenv("HF_MODEL_REPO", "Guguinhaxd/soja-inspection")
+    repo_type = os.getenv("HF_MODEL_REPO_TYPE", "space")
+    filename = os.getenv("HF_MODEL_FILE", "soja_yolo11s_finetuned.pt")
+    token = os.getenv("HF_TOKEN")  # opcional (Space público dispensa)
+    return hf_hub_download(
+        repo_id=repo_id, filename=filename, repo_type=repo_type, token=token
+    )
+
+
 def get_model() -> YOLO:
     global _model, _yolo_to_ours
     if _model is None:
-        path = os.getenv("MODEL_PATH", "soja_yolo11s_finetuned.pt")
-        _model = YOLO(path)
+        _model = YOLO(_resolve_model_path())
         _yolo_to_ours = [CLASS_NAMES.index(_model.names[i]) for i in range(len(_model.names))]
     return _model
 

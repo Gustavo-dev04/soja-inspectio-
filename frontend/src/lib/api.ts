@@ -40,7 +40,9 @@ export async function explainClass(
   pergunta?: string,
   modo: "academico" | "industrial" = "academico"
 ): Promise<ExplainResponse> {
-  const res = await fetch(`${API_URL}/explain`, {
+  // /explain roda como API route do Next.js (Phi-4-mini via GitHub Models),
+  // na mesma origem da Vercel — não usa NEXT_PUBLIC_API_URL (esse é só pro /inspect/YOLO).
+  const res = await fetch(`/api/explain`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ classe, pergunta, modo }),

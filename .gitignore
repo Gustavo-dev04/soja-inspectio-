@@ -24,6 +24,7 @@ node_modules/
 .vercel/
 out/
 *.tsbuildinfo
+next-env.d.ts
 
 # Environment variables
 .env
