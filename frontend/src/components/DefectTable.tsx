@@ -23,38 +23,42 @@ export default function DefectTable({ classCounts, totalGraos }: Props) {
   const rows = Object.entries(classCounts).sort((a, b) => b[1] - a[1]);
 
   return (
-    <table className="w-full text-sm border-collapse">
-      <thead>
-        <tr className="bg-gray-100 text-left">
-          <th className="p-3 font-semibold">Classe</th>
-          <th className="p-3 font-semibold text-right">Qtd</th>
-          <th className="p-3 font-semibold text-right">%</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(([cls, count]) => (
-          <tr key={cls} className="border-t">
-            <td className="p-3 flex items-center gap-2">
-              <span
-                className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
-                style={{ backgroundColor: CLASS_COLORS[cls] ?? "#6b7280" }}
-              />
-              {CLASS_LABELS[cls] ?? cls}
-            </td>
-            <td className="p-3 text-right">{count}</td>
-            <td className="p-3 text-right">
-              {totalGraos > 0
-                ? ((count / totalGraos) * 100).toFixed(1) + "%"
-                : "—"}
-            </td>
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wider text-neutral-400">
+            <th className="px-4 py-2.5 font-medium">Classe</th>
+            <th className="px-4 py-2.5 text-right font-medium">Qtd</th>
+            <th className="px-4 py-2.5 text-right font-medium">%</th>
           </tr>
-        ))}
-        <tr className="border-t font-bold bg-gray-50">
-          <td className="p-3">Total</td>
-          <td className="p-3 text-right">{totalGraos}</td>
-          <td className="p-3 text-right">100%</td>
-        </tr>
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map(([cls, count]) => (
+            <tr key={cls} className="border-t border-white/10 text-neutral-200">
+              <td className="px-4 py-3">
+                <span className="flex items-center gap-2.5">
+                  <span
+                    className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                    style={{ backgroundColor: CLASS_COLORS[cls] ?? "#6b7280" }}
+                  />
+                  {CLASS_LABELS[cls] ?? cls}
+                </span>
+              </td>
+              <td className="px-4 py-3 text-right tabular-nums">{count}</td>
+              <td className="px-4 py-3 text-right tabular-nums text-neutral-400">
+                {totalGraos > 0
+                  ? ((count / totalGraos) * 100).toFixed(1) + "%"
+                  : "—"}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t border-white/15 bg-white/[0.03] font-semibold text-neutral-100">
+            <td className="px-4 py-3">Total</td>
+            <td className="px-4 py-3 text-right tabular-nums">{totalGraos}</td>
+            <td className="px-4 py-3 text-right tabular-nums">100%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }

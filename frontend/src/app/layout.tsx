@@ -21,7 +21,7 @@ export default function RootLayout({
             <Link href="/" className="flex items-center gap-2.5">
               <InspectionLogo className="w-6 text-neutral-200" />
               <span className="text-sm font-medium tracking-tight text-neutral-100">
-                Vígil
+                Vígil<span className="text-brand">.ia</span>
               </span>
               <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-neutral-500">
                 beta

@@ -1,11 +1,29 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { explainClass, type ExplainResponse } from "@/lib/api";
 import { CLASS_LABELS } from "@/components/DefectTable";
+import InspectionLogo from "@/components/InspectionLogo";
 
 interface Props {
   classe: string;
   modo: "academico" | "industrial";
+}
+
+// Perguntas iniciais (a IA é OPCIONAL — só roda quando o usuário clica numa).
+function starterQuestions(label: string, modo: Props["modo"]): string[] {
+  const l = label.toLowerCase();
+  if (modo === "industrial") {
+    return [
+      `O que significa "${l}" no lote?`,
+      "Impacto na classificação comercial",
+      "Que ação operacional tomar?",
+    ];
+  }
+  return [
+    `O que caracteriza ${l}?`,
+    "Quais as causas agronômicas?",
+    "Como reduzir na lavoura?",
+  ];
 }
 
 export default function ExplainPanel({ classe, modo }: Props) {
@@ -13,86 +31,110 @@ export default function ExplainPanel({ classe, modo }: Props) {
   const [loading, setLoading] = useState(false);
   const [perguntaAtiva, setPerguntaAtiva] = useState<string | undefined>(undefined);
 
-  const fetchExplanation = useCallback(
-    async (pergunta?: string) => {
-      setLoading(true);
-      try {
-        const result = await explainClass(classe, pergunta, modo);
-        setData(result);
-        setPerguntaAtiva(pergunta);
-      } catch {
-        setData({
-          resposta: "Não foi possível obter a explicação. Verifique se o backend está rodando.",
-          sugestoes: [],
-        });
-      } finally {
-        setLoading(false);
-      }
-    },
-    [classe, modo]
-  );
+  const label = CLASS_LABELS[classe] ?? classe;
+  const starters = starterQuestions(label, modo);
 
-  useEffect(() => {
+  async function ask(pergunta: string) {
+    setLoading(true);
+    setPerguntaAtiva(pergunta);
+    try {
+      const result = await explainClass(classe, pergunta, modo);
+      setData(result);
+    } catch {
+      setData({
+        resposta:
+          "Não foi possível obter a explicação agora. Tente novamente em instantes.",
+        sugestoes: [],
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function reset() {
     setData(null);
     setPerguntaAtiva(undefined);
-    fetchExplanation(undefined);
-  }, [fetchExplanation]);
+  }
 
-  const label = CLASS_LABELS[classe] ?? classe;
+  const chip = (q: string, active: boolean) =>
+    `text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
+      active
+        ? "bg-brand text-neutral-950 border-brand"
+        : "border-white/15 text-neutral-300 hover:border-brand hover:text-brand"
+    }`;
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-4">
-      <div className="flex items-center justify-between">
-        <h4 className="font-semibold text-gray-800 text-sm">
-          {perguntaAtiva ? `"${perguntaAtiva}"` : `Análise: ${label}`}
-        </h4>
-        {perguntaAtiva && (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-medium text-neutral-100">
+            Pergunte à Vígil<span className="text-brand">.ia</span> sobre {label}
+          </h4>
+          <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
+            opcional
+          </span>
+        </div>
+        {data && !loading && (
           <button
-            onClick={() => fetchExplanation(undefined)}
-            className="text-xs text-gray-400 hover:text-gray-600 underline"
+            onClick={reset}
+            className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-300 hover:underline"
           >
-            voltar
+            limpar
           </button>
         )}
       </div>
 
+      {/* estado: gerando — símbolo girando */}
       {loading ? (
-        <div className="space-y-2 animate-pulse">
-          <div className="h-3 bg-gray-100 rounded w-full" />
-          <div className="h-3 bg-gray-100 rounded w-5/6" />
-          <div className="h-3 bg-gray-100 rounded w-4/6" />
+        <div className="flex flex-col items-center gap-3 py-8 text-center">
+          <InspectionLogo inspecting className="w-12 text-neutral-200" />
+          <p className="animate-pulse text-sm text-neutral-400">
+            Gerando resposta…
+          </p>
+          {perguntaAtiva && (
+            <p className="max-w-sm text-xs text-neutral-600">“{perguntaAtiva}”</p>
+          )}
         </div>
       ) : data ? (
-        <>
-          <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+        /* estado: resposta pronta */
+        <div className="mt-4 space-y-4">
+          {perguntaAtiva && (
+            <p className="text-sm font-medium text-neutral-300">“{perguntaAtiva}”</p>
+          )}
+          <p className="whitespace-pre-line text-sm leading-relaxed text-neutral-200">
             {data.resposta}
           </p>
 
           {data.sugestoes.length > 0 && (
             <div className="space-y-2 pt-1">
-              <p className="text-xs text-gray-400 uppercase tracking-wider">
-                Perguntas relacionadas
+              <p className="text-[11px] uppercase tracking-wider text-neutral-500">
+                Continuar perguntando
               </p>
               <div className="flex flex-wrap gap-2">
                 {data.sugestoes.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => fetchExplanation(s)}
-                    disabled={loading || perguntaAtiva === s}
-                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                      perguntaAtiva === s
-                        ? "bg-green-600 text-white border-green-600"
-                        : "border-gray-300 text-gray-600 hover:border-green-600 hover:text-green-700"
-                    }`}
-                  >
+                  <button key={s} onClick={() => ask(s)} className={chip(s, false)}>
                     {s}
                   </button>
                 ))}
               </div>
             </div>
           )}
-        </>
-      ) : null}
+        </div>
+      ) : (
+        /* estado inicial: perguntinhas (não chama a IA até clicar) */
+        <div className="mt-4 space-y-3">
+          <p className="text-xs text-neutral-500">
+            Toque numa pergunta para a Vígil.ia gerar uma explicação.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {starters.map((s) => (
+              <button key={s} onClick={() => ask(s)} className={chip(s, false)}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
