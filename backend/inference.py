@@ -31,11 +31,23 @@ def _resolve_model_path() -> str:
     )
 
 
+def _normalize_class(name: str) -> str:
+    """Mapeia o nome do modelo p/ o nosso vocabulario.
+
+    O .pt foi treinado com rotulos como 'Broken soybeans'; o resto do app usa
+    a forma curta ('broken'). Tira o sufixo ' soybeans' e normaliza o caixa.
+    """
+    return name.lower().replace("soybeans", "").strip()
+
+
 def get_model() -> YOLO:
     global _model, _yolo_to_ours
     if _model is None:
         _model = YOLO(_resolve_model_path())
-        _yolo_to_ours = [CLASS_NAMES.index(_model.names[i]) for i in range(len(_model.names))]
+        _yolo_to_ours = [
+            CLASS_NAMES.index(_normalize_class(_model.names[i]))
+            for i in range(len(_model.names))
+        ]
     return _model
 
 
