@@ -6,15 +6,15 @@ import hashlib
 import numpy as np
 import cv2
 import gradio as gr
-import tensorflow as tf
+from ultralytics import YOLO
 from PIL import Image
 from datetime import datetime
 from huggingface_hub import HfApi
 
-MODEL_PATH   = "soja_model_final.keras"
+MODEL_PATH   = "soja_yolo11s_finetuned.pt"
 CLASSES_PATH = "soja_classes.json"
 
-model = tf.keras.models.load_model(MODEL_PATH)
+model = YOLO(MODEL_PATH)
 
 with open(CLASSES_PATH) as f:
     CLASS_NAMES = json.load(f)
@@ -45,15 +45,27 @@ HF_TOKEN         = os.getenv("SOJA_CORRECTIONS", None)
 
 
 # ── Core helpers ─────────────────────────────────────────────────────
-def _preprocess(img_array: np.ndarray) -> np.ndarray:
-    img = tf.image.resize(img_array, IMG_SIZE)
-    return np.expand_dims(img.numpy(), 0)
+# Mapeia o índice de saída do YOLO → índice da nossa lista CLASS_NAMES.
+# O YOLO ordena as classes alfabeticamente pelos nomes das pastas; como CLASS_NAMES
+# também está em ordem alfabética isto costuma ser identidade, mas remapeamos por
+# NOME para ficar robusto a qualquer divergência de ordem.
+_YOLO_TO_OURS = [CLASS_NAMES.index(model.names[i]) for i in range(len(model.names))]
 
 
 def _predict(crop: np.ndarray):
-    pred = model.predict(_preprocess(crop), verbose=0)[0]
-    idx  = int(np.argmax(pred))
-    return idx, float(pred[idx]), pred
+    """Classifica um recorte RGB (numpy) com o YOLO11s-cls.
+
+    Passa um PIL.Image RGB — exatamente o mesmo caminho usado no treino/validação
+    (91,7% no domínio real). Devolve (idx, confiança, vetor_de_probabilidades) com o
+    vetor já reordenado para a ordem de CLASS_NAMES, mantendo o contrato dos chamadores.
+    """
+    result = model.predict(Image.fromarray(crop), imgsz=IMG_SIZE[0], verbose=False)[0]
+    yolo_probs = result.probs.data.cpu().numpy()
+    pv = np.zeros(len(CLASS_NAMES), dtype=float)
+    for yolo_idx, our_idx in enumerate(_YOLO_TO_OURS):
+        pv[our_idx] = float(yolo_probs[yolo_idx])
+    idx = int(np.argmax(pv))
+    return idx, float(pv[idx]), pv
 
 
 def _crop_single_grain(arr: np.ndarray):
@@ -321,7 +333,7 @@ with gr.Blocks(title="Classificador de Grãos de Soja") as demo:
     gr.Markdown(
         """
         # Classificador de Grãos de Soja
-        **Demo FATEC** &nbsp;·&nbsp; EfficientNet-B0 + OpenCV
+        **Demo FATEC** &nbsp;·&nbsp; YOLO11s-cls + OpenCV
         &nbsp;·&nbsp; 5 classes: Intacto · Imaturo · Quebrado · Casca danificada · Manchado
         """
     )
@@ -424,7 +436,7 @@ with gr.Blocks(title="Classificador de Grãos de Soja") as demo:
 
                 ## Referências
 
-                - **Modelo:** EfficientNet-B0 (ImageNet) + fine-tuning — TensorFlow/Keras
+                - **Modelo:** YOLO11s-cls (ImageNet) + fine-tuning no domínio real — Ultralytics/PyTorch
                 - **Dataset:** SoyaBeans Classifications v2 — Roboflow, MIT License
                 - **Segmentação:** OpenCV (grayscale → Otsu threshold → findContours)
                 """
