@@ -35,10 +35,10 @@ export default function RootLayout({
                 Inspecionar
               </Link>
               <Link
-                href="/dashboard"
+                href="/sobre"
                 className="text-neutral-400 transition-colors hover:text-neutral-100"
               >
-                Dashboard
+                Sobre
               </Link>
             </div>
           </nav>
