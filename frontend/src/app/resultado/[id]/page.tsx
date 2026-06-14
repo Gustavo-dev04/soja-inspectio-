@@ -111,7 +111,9 @@ export default function ResultadoPage() {
 
         <div>
           <h3 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-            {data.total_graos} grãos detectados
+            {data.total_graos === 1
+              ? "1 grão detectado"
+              : `${data.total_graos} grãos detectados`}
           </h3>
           <DefectTable classCounts={data.class_counts} totalGraos={data.total_graos} />
 
@@ -133,48 +135,52 @@ export default function ResultadoPage() {
               </p>
             </div>
           )}
-        </div>
-      </div>
 
-      {/* Painel de análise (IA opcional) */}
-      {uniqueClasses.length > 0 && (
-        <div className="space-y-4 border-t border-white/5 pt-6">
-          <div className="flex items-center gap-2">
-            <h3 className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-              {modo === "academico" ? "Análise técnica" : "Diagnóstico operacional"}
-            </h3>
-            <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
-              Groq · Llama 3.3
-            </span>
-          </div>
+          {/* Análise da IA (opcional) — logo abaixo do resultado das classes */}
+          {uniqueClasses.length > 0 && (
+            <div className="mt-6 space-y-4">
+              <div className="flex items-center gap-2">
+                <h3 className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                  {modo === "academico" ? "Análise técnica" : "Diagnóstico operacional"}
+                </h3>
+                <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
+                  Groq · Llama 3.3
+                </span>
+              </div>
 
-          {/* Tabs por classe */}
-          {uniqueClasses.length > 1 && (
-            <div className="flex flex-wrap gap-2">
-              {uniqueClasses.map((cls) => (
-                <button
-                  key={cls}
-                  onClick={() => setClasseAtiva(cls)}
-                  className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                    classeAtiva === cls
-                      ? "border-brand bg-brand text-neutral-950"
-                      : "border-white/15 text-neutral-300 hover:border-brand hover:text-brand"
-                  }`}
-                >
-                  {CLASS_LABELS[cls] ?? cls}
-                  <span className="ml-1.5 text-xs opacity-70">
-                    {data.class_counts[cls]}
-                  </span>
-                </button>
-              ))}
+              {/* Tabs por classe (só quando há mais de uma) */}
+              {uniqueClasses.length > 1 && (
+                <div className="flex flex-wrap gap-2">
+                  {uniqueClasses.map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => setClasseAtiva(cls)}
+                      className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+                        classeAtiva === cls
+                          ? "border-brand bg-brand text-neutral-950"
+                          : "border-white/15 text-neutral-300 hover:border-brand hover:text-brand"
+                      }`}
+                    >
+                      {CLASS_LABELS[cls] ?? cls}
+                      <span className="ml-1.5 text-xs opacity-70">
+                        {data.class_counts[cls]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {classeAtiva && (
+                <ExplainPanel
+                  key={`${classeAtiva}-${modo}`}
+                  classe={classeAtiva}
+                  modo={modo}
+                />
+              )}
             </div>
           )}
-
-          {classeAtiva && (
-            <ExplainPanel key={`${classeAtiva}-${modo}`} classe={classeAtiva} modo={modo} />
-          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

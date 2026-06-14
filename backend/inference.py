@@ -83,8 +83,44 @@ def _segment_grains(img_array: np.ndarray) -> list[tuple[int, int, int, int]]:
     return boxes
 
 
-def run_inference(image: Image.Image) -> dict[str, Any]:
+def _classify(crop: Image.Image) -> tuple[int, float]:
+    """Classifica um recorte e devolve (índice na nossa ordem, confiança)."""
     model = get_model()
+    result = model.predict(crop, imgsz=224, verbose=False)[0]
+    yolo_probs = result.probs.data.cpu().numpy()
+
+    pv = np.zeros(len(CLASS_NAMES), dtype=float)
+    for yolo_idx, our_idx in enumerate(_yolo_to_ours):
+        pv[our_idx] = float(yolo_probs[yolo_idx])
+
+    idx = int(np.argmax(pv))
+    return idx, float(pv[idx])
+
+
+def _detection(idx: int, conf: float, bbox: list[int]) -> dict:
+    return {
+        "class": CLASS_NAMES[idx],
+        "class_id": idx,
+        "confidence": round(conf, 4),
+        "bbox": bbox,
+    }
+
+
+def run_inference_single(image: Image.Image) -> dict[str, Any]:
+    """Modo 1 grão: classifica a imagem inteira como um único grão."""
+    w, h = image.size
+    idx, conf = _classify(image)
+    return {
+        "total_graos": 1,
+        "detections": [_detection(idx, conf, [0, 0, w, h])],
+        "class_counts": {CLASS_NAMES[idx]: 1},
+        "image_width": w,
+        "image_height": h,
+    }
+
+
+def run_inference_multi(image: Image.Image) -> dict[str, Any]:
+    """Modo multi-grão: segmenta com OpenCV e classifica cada recorte."""
     img_array = np.array(image)
     boxes = _segment_grains(img_array)
 
@@ -95,24 +131,9 @@ def run_inference(image: Image.Image) -> dict[str, Any]:
         crop = img_array[y1:y2, x1:x2]
         if crop.size == 0:
             continue
-
-        result = model.predict(Image.fromarray(crop), imgsz=224, verbose=False)[0]
-        yolo_probs = result.probs.data.cpu().numpy()
-
-        pv = np.zeros(len(CLASS_NAMES), dtype=float)
-        for yolo_idx, our_idx in enumerate(_yolo_to_ours):
-            pv[our_idx] = float(yolo_probs[yolo_idx])
-
-        our_idx = int(np.argmax(pv))
-        conf = float(pv[our_idx])
-        cls_name = CLASS_NAMES[our_idx]
-
-        detections.append({
-            "class": cls_name,
-            "class_id": our_idx,
-            "confidence": round(conf, 4),
-            "bbox": [x1, y1, x2, y2],
-        })
+        idx, conf = _classify(Image.fromarray(crop))
+        detections.append(_detection(idx, conf, [x1, y1, x2, y2]))
+        cls_name = CLASS_NAMES[idx]
         class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
 
     w, h = image.size
@@ -123,3 +144,8 @@ def run_inference(image: Image.Image) -> dict[str, Any]:
         "image_width": w,
         "image_height": h,
     }
+
+
+def run_inference(image: Image.Image, multi: bool = False) -> dict[str, Any]:
+    """Padrão atual: 1 grão. `multi=True` liga a segmentação multi-grão."""
+    return run_inference_multi(image) if multi else run_inference_single(image)

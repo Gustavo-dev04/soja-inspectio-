@@ -35,6 +35,7 @@ app.add_middleware(
 class InspectRequest(BaseModel):
     image: str
     imagem_url: str = ""
+    multi: bool = False  # padrão atual: 1 grão; True liga o multi-grão
 
 
 class InspectResponse(BaseModel):
@@ -59,7 +60,7 @@ def inspect(body: InspectRequest):
         raise HTTPException(status_code=422, detail=f"Imagem inválida: {exc}")
 
     try:
-        result = run_inference(image)
+        result = run_inference(image, multi=body.multi)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro de inferência: {exc}")
 
