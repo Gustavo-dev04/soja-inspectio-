@@ -3,11 +3,11 @@ import { useEffect, useRef } from "react";
 import type { Detection } from "@/lib/api";
 
 const CLASS_COLORS: Record<string, string> = {
-  soja_boa: "#22c55e",
-  soja_verde: "#84cc16",
-  soja_meia_lua: "#f59e0b",
-  soja_ardida: "#ef4444",
-  soja_quebrada: "#8b5cf6",
+  intact: "#22c55e",
+  immature: "#84cc16",
+  broken: "#8b5cf6",
+  "skin-damaged": "#f59e0b",
+  spotted: "#ef4444",
 };
 
 interface Props {

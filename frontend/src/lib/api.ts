@@ -16,6 +16,11 @@ export interface InspectResponse {
   image_height: number;
 }
 
+export interface ExplainResponse {
+  resposta: string;
+  sugestoes: string[];
+}
+
 export async function inspectImage(file: File): Promise<InspectResponse> {
   const b64 = await fileToBase64(file);
   const res = await fetch(`${API_URL}/inspect`, {
@@ -28,6 +33,23 @@ export async function inspectImage(file: File): Promise<InspectResponse> {
     throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<InspectResponse>;
+}
+
+export async function explainClass(
+  classe: string,
+  pergunta?: string,
+  modo: "academico" | "industrial" = "academico"
+): Promise<ExplainResponse> {
+  const res = await fetch(`${API_URL}/explain`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ classe, pergunta, modo }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<ExplainResponse>;
 }
 
 function fileToBase64(file: File): Promise<string> {
