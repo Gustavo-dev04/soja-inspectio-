@@ -191,7 +191,7 @@ Lista e cria lotes de inspeção.
 ## 7. Banco de Dados (Supabase)
 
 **Projeto:** `soja-inspection`  
-**URL:** `https://aclabwtsdzzdmpumtjbx.supabase.co`
+**URL:** `https://btjboljaylsiezpcdqfp.supabase.co`
 
 ### Tabela `inspecoes`
 
