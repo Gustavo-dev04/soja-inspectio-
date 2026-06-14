@@ -1,55 +1,57 @@
 # HANDOFF — Deploy do soja-inspection (contexto pra nova sessão)
 
-> Documento de transição. A sessão anterior terminou aqui porque a allowlist de
-> egress só passa a valer em **sessão nova**. Este arquivo tem o estado completo.
-> Branch de trabalho: **`claude/soja-inspection-setup-b2jaG`**.
+> Documento de transição. Branch de trabalho: **`claude/soja-inspection-setup-b2jaG`**.
+> Atualizado em **2026-06-14**. Mudança principal vs. versão anterior: o backend de
+> visão **deixou de ir pro Render** (pedia cartão no plano `starter`) e vai pro
+> **Hugging Face Spaces** (grátis, 16GB RAM, sem cartão).
 
 ---
 
-## Objetivo atual
+## STATUS (2026-06-14)
 
-1. **Validar** as credenciais aqui na sessão nova (egress já liberado — ver abaixo).
-2. **Deployar**: frontend + LLM na **Vercel**, backend de visão no **Render**.
-
-A parte de código está **pronta e commitada**. Falta validar e subir.
+- ✅ **Credenciais validadas** nesta máquina:
+  - Supabase **anon** → REST `inspecoes`/`lotes` = `200`
+  - Supabase **service_role** → REST `200` (`role=service_role`, `ref=btjboljaylsiezpcdqfp`)
+  - **Groq + Llama 3.3 70b** (`llama-3.3-70b-versatile`) → `200`, respondeu
+  - Egress OK p/ `api.groq.com` e `btjboljaylsiezpcdqfp.supabase.co`
+  - MCP do Supabase acessível (projeto `soja-inspection`, ACTIVE_HEALTHY)
+- ✅ Backend adaptado pra HF Spaces (Docker) e commitado (`backend/Dockerfile`, `backend/README.md`).
+- ⏳ **PENDENTE:** criar o Space e subir; depois Vercel; depois CORS.
+- ⚠️ **Segurança:** tabelas `modelos`, `datasets`, `melhorias` estão com **RLS desabilitado**
+  (expostas pela anon key). Ver seção de segurança no fim.
 
 ---
 
 ## Arquitetura (2 peças — por quê)
 
-O modelo de visão (`torch`/`ultralytics`) passa de 1GB → **não cabe** no limite
-serverless da Vercel (~250MB). Então:
+O modelo de visão (`torch`/`ultralytics`) **não cabe** no limite serverless da Vercel
+(~250MB). Então:
 
 | Parte | Onde | O quê |
 |---|---|---|
 | Frontend Next.js | **Vercel** | UI responsiva, modos Acadêmico/Industrial |
 | `/api/explain` | **Vercel** (API route Next.js) | LLM **Llama 3.3 70b via Groq** (OpenAI-compatible). Não usa Python. |
-| `/inspect` | **Render** (Docker) | FastAPI + YOLO11s-cls + OpenCV. Modelo `.pt` embutido na imagem. |
+| `/inspect` | **Hugging Face Spaces** (Docker) | FastAPI + YOLO11s-cls + OpenCV. Modelo `.pt` embutido na imagem. |
 | Banco | **Supabase** | tabelas `inspecoes` + `lotes` |
 
 Fluxo: foto → OpenCV recorta grãos → YOLO11s-cls classifica → tabela + boxes →
 usuário clica numa classe → `/api/explain` chama o Llama → resposta agronômica +
-botões de follow-up. Toggle **Acadêmico** (técnico-científico) vs **Industrial**
-(comercial/CONAB).
+follow-ups. Toggle **Acadêmico** vs **Industrial**.
 
 ---
 
-## O que já foi feito (commits na branch)
+## Arquivos-chave
 
-- `feat: integra Groq LLM com modos acadêmico e industrial` — ExplainPanel, toggle, tabs por classe
-- `feat: deploy Vercel (frontend+LLM) + Render (visão)` — `/api/explain` route, `render.yaml`, download do modelo
-- `feat: usa Llama 3.3 70b (Groq)` — `/api/explain` aponta pro Groq; modelo `.pt` (10MB) embutido em `backend/`
-- `chore: migração SQL versionada` — `supabase/migrations/0001_init.sql`
-- Build da Vercel validado localmente (`tsc --noEmit` + `next build` OK; route `/api/explain` registra como função)
-
-Arquivos-chave:
 - `frontend/src/app/api/explain/route.ts` — LLM (Groq/Llama), trocável via `LLM_MODEL`/`LLM_ENDPOINT`
 - `frontend/src/components/ExplainPanel.tsx` — UI da resposta + follow-ups
 - `frontend/src/app/resultado/[id]/page.tsx` — toggle de modo + tabs por classe
+- `backend/main.py` — FastAPI: `/health`, `/inspect`, `/inspecoes`, `/lotes`
 - `backend/inference.py` — OpenCV segmenta + YOLO classifica; usa `.pt` local, fallback HF
-- `backend/soja_yolo11s_finetuned.pt` — modelo embutido (10MB, exceção no `.gitignore`)
-- `render.yaml` — blueprint Docker, `rootDir: backend`, health `/health`
-- `docs/deploy.md` — passo a passo detalhado
+- `backend/database.py` — exige `SUPABASE_URL` + `SUPABASE_KEY` no ambiente
+- `backend/soja_yolo11s_finetuned.pt` — modelo embutido (11MB, exceção no `.gitignore`)
+- `backend/Dockerfile` — usuário uid 1000, caches graváveis, porta 7860 (`$PORT` p/ fallback)
+- `backend/README.md` — **Space card** (`sdk: docker`, `app_port: 7860`)
+- `render.yaml` / `docs/deploy.md` — legado do plano Render (referência)
 
 ---
 
@@ -57,88 +59,101 @@ Arquivos-chave:
 
 > ⚠️ **service_role** e **GROQ_API_KEY** são segredos — NÃO ficam neste arquivo.
 > O usuário cola na sessão nova quando pedir. A **anon** é pública (vai pro browser),
-> então está inline pra facilitar a validação.
+> então está inline pra facilitar.
 
 - **SUPABASE_URL:** `https://btjboljaylsiezpcdqfp.supabase.co`
 - **anon** (pública, `ref=btjboljaylsiezpcdqfp`, `role=anon`):
   ```
   eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ0amJvbGpheWxzaWV6cGNkcWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyODQwODYsImV4cCI6MjA5NDg2MDA4Nn0.rN2PQOv6h5SdukY_XwT4Y3aYULR7IqrH9qlyIba9dok
   ```
-- **service_role** (`ref=btjboljaylsiezpcdqfp`, `role=service_role`): **o usuário cola** (Settings → API → service_role no projeto btjbol)
+- **service_role** (`role=service_role`): **o usuário cola** (Settings → API → service_role)
 - **GROQ_API_KEY** (`gsk_...`): **o usuário cola** (console.groq.com/keys)
 
-Dica de sanidade: todo JWT do Supabase tem `ref` no payload. Sempre confira que
-URL + anon + service_role têm o **mesmo** `ref` (`btjboljaylsiezpcdqfp`). Decodificar:
+Sanidade: todo JWT do Supabase tem `ref` no payload; confira que URL + anon + service_role
+têm o mesmo `ref`. Decodificar:
 ```bash
 echo "<jwt>" | cut -d. -f2 | tr '_-' '/+' | sed 's/$/===/' | base64 -d | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['role'],d['ref'])"
 ```
 
 ---
 
-## Egress (rede)
+## Egress (rede) — PRECISA AJUSTE PRA AUTOMAÇÃO DO HF
 
-Já configurado como **Custom** com estes hosts adicionados (+ defaults dos package managers):
+Allowlist **Custom** atual:
 - `api.groq.com`
 - `btjboljaylsiezpcdqfp.supabase.co`
 
-Em sessão nova, `curl` normal já deve sair pra esses hosts (sem precisar contornar sandbox).
+> ➕ Pra eu criar/subir o Space pela API, **adicionar `huggingface.co` à allowlist**
+> (mudança de egress só vale em **sessão nova**). Sem isso, `huggingface.co` dá 403.
 
 ---
 
-## PENDENTE 1 — Validar (rodar nesta sessão nova)
+## PENDENTE — Deploy
 
-Pedir as 2 chaves secretas ao usuário, depois:
+### 1) Backend no Hugging Face Spaces (automatizável na próxima sessão)
 
+Pré-requisitos do usuário (fazer ANTES da sessão nova):
+1. Adicionar `huggingface.co` à allowlist de egress.
+2. Criar um **token de escrita** do HF: hf.co/settings/tokens → New token → **Write**.
+
+Conta HF: `Guguinhaxd`. Space novo: **`Guguinhaxd/soja-inspection-api`**
+→ URL `https://guguinhaxd-soja-inspection-api.hf.space`.
+(O `Guguinhaxd/soja-inspection` que já existe é um demo **Gradio** — NÃO mexer.)
+
+Receita (rodar na sessão nova, com o token e a service_role colados):
 ```bash
-# 1) Supabase anon lê tabelas (confirma conexão + tabelas + RLS)
-ANON="<anon inline acima>"
-BASE="https://btjboljaylsiezpcdqfp.supabase.co/rest/v1"
-curl -sS "$BASE/inspecoes?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -w "\n[%{http_code}]\n"
-curl -sS "$BASE/lotes?select=id&limit=1"     -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -w "\n[%{http_code}]\n"
-
-# 2) Groq + Llama responde
-curl -sS https://api.groq.com/openai/v1/chat/completions \
-  -H "Authorization: Bearer <GROQ_KEY>" -H "Content-Type: application/json" \
-  -d '{"model":"llama-3.3-70b-versatile","max_tokens":30,"messages":[{"role":"user","content":"responda: ok"}]}' -w "\n[%{http_code}]\n"
+pip install -q huggingface_hub   # não vem instalado na shell
 ```
+```python
+from huggingface_hub import HfApi
+api = HfApi(token="<HF_WRITE_TOKEN>")
+repo_id = "Guguinhaxd/soja-inspection-api"
+api.create_repo(repo_id, repo_type="space", space_sdk="docker", private=False, exist_ok=True)
+api.upload_folder(
+    repo_id=repo_id, repo_type="space", folder_path="backend",
+    ignore_patterns=["__pycache__", "*.pyc", ".env"],
+)
+api.add_space_secret(repo_id, "SUPABASE_URL", "https://btjboljaylsiezpcdqfp.supabase.co")
+api.add_space_secret(repo_id, "SUPABASE_KEY", "<service_role>")
+# CORS_ORIGIN: setar depois da URL da Vercel (api.add_space_secret(repo_id,"CORS_ORIGIN",<url>))
+```
+O build (Docker, torch+ultralytics) leva alguns minutos. Healthcheck: `GET /health` → `{"status":"ok"}`.
 
-- `200` na inspecoes/lotes = tabelas existem e RLS deixa anon ler. Se vier erro
-  `relation "inspecoes" does not exist`, rodar `supabase/migrations/0001_init.sql`
-  no SQL Editor do Supabase (idempotente).
-- `200` no Groq = chave + modelo OK.
+### 2) Frontend na Vercel — Root Directory = `frontend`
 
----
+Conta Vercel conectada: team `gustavo-dev04's projects`. O MCP `deploy_to_vercel`
+NÃO seta Root Directory nem env vars → usar o **import pelo painel**.
 
-## PENDENTE 2 — Deploy
-
-### Render (backend) — New → Blueprint → repo, branch `claude/soja-inspection-setup-b2jaG`
-| Env var | Valor |
-|---|---|
-| `SUPABASE_URL` | `https://btjboljaylsiezpcdqfp.supabase.co` |
-| `SUPABASE_KEY` | **service_role** (btjbol) |
-| `CORS_ORIGIN` | (vazio no início; depois a URL da Vercel) |
-
-→ anotar URL pública (ex.: `https://soja-inspection-api.onrender.com`).
-Modelo já vem embutido na imagem; sem download no boot.
-
-### Vercel (frontend) — importar repo, **Root Directory = `frontend`**
 | Env var | Valor |
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://btjboljaylsiezpcdqfp.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon (inline acima) |
-| `NEXT_PUBLIC_API_URL` | URL do Render |
+| `NEXT_PUBLIC_API_URL` | `https://guguinhaxd-soja-inspection-api.hf.space` |
 | `GROQ_API_KEY` | `gsk_...` (sem `NEXT_PUBLIC_` — server-side) |
 
-### Depois
-- Voltar no Render e setar `CORS_ORIGIN` = URL final da Vercel.
+### 3) Fechar o CORS
+- Setar a secret `CORS_ORIGIN` do Space = URL final da Vercel (re-deploy do Space).
 - Testar: upload de foto → boxes + tabela → clicar numa classe → resposta do Llama.
+
+---
+
+## Segurança (RLS) — pendente, decisão do usuário
+
+3 tabelas com **RLS desabilitado** (`modelos`, `datasets`, `melhorias`): com a anon key
+(pública) qualquer um lê/escreve. NÃO aplicar cegamente — habilitar RLS sem policy
+bloqueia todo acesso. SQL de correção (revisar uso antes):
+```sql
+ALTER TABLE public.modelos   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.datasets  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.melhorias ENABLE ROW LEVEL SECURITY;
+```
 
 ---
 
 ## Observações honestas
 
-- **val do modelo = 12 fotos** (91,7% = 11/12). Erra em casos ambíguos (skin-damaged ↔ broken)
-  e tipos de soja fora do treino. Plano: juntar ≥500 imagens antes de re-treinar.
-- Plano `free` do Render hiberna (cold start ~30-60s). Pra demo do professor, considerar `starter`.
-- MCP do Supabase precisa de aprovação manual do usuário; se aprovado, dá pra criar/verificar
-  tabelas e pegar chaves sem mexer no egress.
+- **val do modelo = 12 fotos** (91,7% = 11/12). Erra em casos ambíguos (skin-damaged ↔ broken).
+  Plano: juntar ≥500 imagens antes de re-treinar.
+- HF Spaces free dorme após inatividade; acorda na 1ª requisição (cold start enquanto
+  carrega o torch). Pra demo do professor, fazer uma chamada de "aquecimento" antes.
+- Rotacionar `GROQ_API_KEY` e `service_role` depois do deploy (passaram pelo chat).
