@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import BoundingBoxCanvas from "@/components/BoundingBoxCanvas";
-import DefectTable, { CLASS_LABELS } from "@/components/DefectTable";
+import DefectTable, { CLASS_LABELS, CLASS_COLORS } from "@/components/DefectTable";
 import ExplainPanel from "@/components/ExplainPanel";
+import ResultVerdict from "@/components/ResultVerdict";
 import type { InspectResponse } from "@/lib/api";
 
 type Modo = "academico" | "industrial";
@@ -56,10 +57,20 @@ export default function ResultadoPage() {
   const defectClasses = uniqueClasses.filter((c) => c !== "intact");
   const hasDefects = defectClasses.length > 0;
 
+  // classe dominante (p/ o card de veredito) + confiança média dela
+  const dominant = uniqueClasses
+    .slice()
+    .sort((a, b) => data.class_counts[b] - data.class_counts[a])[0];
+  const domDets = data.detections.filter((d) => d.class === dominant);
+  const domConf = domDets.length
+    ? domDets.reduce((s, d) => s + d.confidence, 0) / domDets.length
+    : 0;
+  const single = data.total_graos === 1;
+
   return (
     <div className="space-y-7">
       {/* Header + mode toggle */}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+      <div className="reveal flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-2xl font-medium tracking-tight text-neutral-100">
             Resultado da inspeção
@@ -91,25 +102,41 @@ export default function ResultadoPage() {
         </div>
       </div>
 
+      {/* Card de veredito */}
+      {dominant && (
+        <ResultVerdict
+          label={CLASS_LABELS[dominant] ?? dominant}
+          color={CLASS_COLORS[dominant] ?? "#16a34a"}
+          confidence={domConf}
+          totalGraos={data.total_graos}
+          single={single}
+        />
+      )}
+
       {/* Imagem + tabela */}
       <div className="grid gap-6 md:grid-cols-2">
-        <div>
+        <div className="reveal" style={{ animationDelay: "80ms" }}>
           <h3 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
             Imagem com detecções
           </h3>
           {data.imageDataUrl ? (
-            <BoundingBoxCanvas
-              imageDataUrl={data.imageDataUrl}
-              detections={data.detections}
-              imageWidth={data.image_width}
-              imageHeight={data.image_height}
-            />
+            <div
+              className="overflow-hidden rounded-xl ring-1 ring-white/10"
+              style={{ boxShadow: `0 0 60px -20px ${CLASS_COLORS[dominant] ?? "#16a34a"}55` }}
+            >
+              <BoundingBoxCanvas
+                imageDataUrl={data.imageDataUrl}
+                detections={data.detections}
+                imageWidth={data.image_width}
+                imageHeight={data.image_height}
+              />
+            </div>
           ) : (
             <p className="text-sm text-neutral-500">Imagem não disponível.</p>
           )}
         </div>
 
-        <div>
+        <div className="reveal" style={{ animationDelay: "140ms" }}>
           <h3 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
             {data.total_graos === 1
               ? "1 grão detectado"

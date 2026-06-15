@@ -33,8 +33,17 @@ export default function DefectTable({ classCounts, totalGraos }: Props) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(([cls, count]) => (
-            <tr key={cls} className="border-t border-white/10 text-neutral-200">
+          {rows.map(([cls, count]) => {
+            const pct = totalGraos > 0 ? (count / totalGraos) * 100 : 0;
+            const c = CLASS_COLORS[cls] ?? "#6b7280";
+            return (
+            <tr
+              key={cls}
+              className="border-t border-white/10 text-neutral-200 transition-colors hover:bg-white/[0.02]"
+              style={{
+                background: `linear-gradient(to right, ${c}1f ${pct}%, transparent ${pct}%)`,
+              }}
+            >
               <td className="px-4 py-3">
                 <span className="flex items-center gap-2.5">
                   <span
@@ -46,12 +55,11 @@ export default function DefectTable({ classCounts, totalGraos }: Props) {
               </td>
               <td className="px-4 py-3 text-right tabular-nums">{count}</td>
               <td className="px-4 py-3 text-right tabular-nums text-neutral-400">
-                {totalGraos > 0
-                  ? ((count / totalGraos) * 100).toFixed(1) + "%"
-                  : "—"}
+                {totalGraos > 0 ? pct.toFixed(1) + "%" : "—"}
               </td>
             </tr>
-          ))}
+            );
+          })}
           <tr className="border-t border-white/15 bg-white/[0.03] font-semibold text-neutral-100">
             <td className="px-4 py-3">Total</td>
             <td className="px-4 py-3 text-right tabular-nums">{totalGraos}</td>
