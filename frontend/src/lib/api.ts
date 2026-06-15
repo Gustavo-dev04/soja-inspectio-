@@ -71,22 +71,36 @@ export interface ChatMsg {
   content: string;
 }
 
-export async function explainClass(
+// Chat com a Vígil.ia em streaming: chama `onToken` a cada pedaço de texto
+// e resolve com a resposta completa. /api/explain roda como API route do Next
+// (Groq · Llama 3.3) na mesma origem da Vercel.
+export async function explainClassStream(
   classe: string,
-  pergunta: string | undefined,
-  modo: "academico" | "industrial" = "academico",
-  historico: ChatMsg[] = []
-): Promise<ExplainResponse> {
-  // /explain roda como API route do Next.js (Groq · Llama 3.3) na mesma origem
-  // da Vercel — não usa NEXT_PUBLIC_API_URL (esse é só pro /inspect/YOLO).
+  pergunta: string,
+  modo: "academico" | "industrial",
+  historico: ChatMsg[],
+  onToken: (chunk: string) => void
+): Promise<string> {
   const res = await fetch(`/api/explain`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ classe, pergunta, modo, historico }),
   });
-  if (!res.ok) {
+  if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
   }
-  return res.json() as Promise<ExplainResponse>;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    if (chunk) {
+      full += chunk;
+      onToken(chunk);
+    }
+  }
+  return full;
 }

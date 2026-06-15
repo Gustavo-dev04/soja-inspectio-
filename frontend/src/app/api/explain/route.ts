@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 // LLM via API compatível com OpenAI. Default: Groq + Llama 3.3 70b (grátis, rápido).
-// Trocável por env sem mexer no código.
 const ENDPOINT =
   process.env.LLM_ENDPOINT ?? "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.LLM_MODEL ?? "llama-3.3-70b-versatile";
@@ -14,34 +13,6 @@ const CLASS_PT: Record<string, string> = {
   broken: "Quebrado",
   "skin-damaged": "Casca danificada",
   spotted: "Manchado",
-};
-
-const SUGESTOES: Record<string, string[]> = {
-  immature: [
-    "Como evitar grãos imaturos na colheita?",
-    "Qual o impacto comercial do grão imaturo?",
-    "Como identificar o ponto certo de colheita?",
-  ],
-  broken: [
-    "Por que os grãos quebram durante a colheita?",
-    "Como reduzir perdas por quebra?",
-    "Qual % de quebra é tolerado pela CONAB?",
-  ],
-  "skin-damaged": [
-    "O que causa danos à casca do grão?",
-    "Como prevenir danos na colheita e transporte?",
-    "Grão com casca danificada pode ser comercializado?",
-  ],
-  spotted: [
-    "O que causa manchas nos grãos de soja?",
-    "Manchas indicam contaminação fúngica?",
-    "Como tratar grãos manchados no armazenamento?",
-  ],
-  intact: [
-    "Como manter os grãos íntegros durante a colheita?",
-    "Quais cuidados no armazenamento?",
-    "Como a qualidade é avaliada no mercado?",
-  ],
 };
 
 interface ChatMsg {
@@ -59,10 +30,7 @@ interface ExplainBody {
 export async function POST(req: NextRequest) {
   const token = process.env.GROQ_API_KEY ?? process.env.LLM_API_KEY;
   if (!token) {
-    return NextResponse.json(
-      { detail: "GROQ_API_KEY não configurada" },
-      { status: 503 }
-    );
+    return NextResponse.json({ detail: "GROQ_API_KEY não configurada" }, { status: 503 });
   }
 
   let body: ExplainBody;
@@ -90,7 +58,6 @@ export async function POST(req: NextRequest) {
     "Responda sempre em português brasileiro, de forma conversacional, mantendo o contexto das mensagens anteriores. " +
     modoInstrucao;
 
-  // histórico recente (limitado) + a pergunta atual
   const hist = (Array.isArray(historico) ? historico : [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && m.content)
     .slice(-8)
@@ -106,23 +73,17 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         model: MODEL,
-        messages: [
-          { role: "system", content: system },
-          ...hist,
-          { role: "user", content: perguntaFinal },
-        ],
+        messages: [{ role: "system", content: system }, ...hist, { role: "user", content: perguntaFinal }],
         max_tokens: 512,
         temperature: 0.4,
+        stream: true,
       }),
     });
   } catch {
-    return NextResponse.json(
-      { detail: "Falha ao contatar o provedor de LLM" },
-      { status: 502 }
-    );
+    return NextResponse.json({ detail: "Falha ao contatar o provedor de LLM" }, { status: 502 });
   }
 
-  if (!resp.ok) {
+  if (!resp.ok || !resp.body) {
     const errText = await resp.text().catch(() => "");
     return NextResponse.json(
       { detail: `LLM retornou ${resp.status}: ${errText.slice(0, 200)}` },
@@ -130,13 +91,47 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const data = (await resp.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const resposta = data.choices?.[0]?.message?.content?.trim() ?? "";
+  // Reemite só o texto (deltas) do SSE da Groq como um stream de texto simples.
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      let buf = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            const t = line.trim();
+            if (!t.startsWith("data:")) continue;
+            const payload = t.slice(5).trim();
+            if (payload === "[DONE]") {
+              controller.close();
+              return;
+            }
+            try {
+              const json = JSON.parse(payload);
+              const delta: string | undefined = json.choices?.[0]?.delta?.content;
+              if (delta) controller.enqueue(encoder.encode(delta));
+            } catch {
+              /* ignora linhas parciais */
+            }
+          }
+        }
+      } finally {
+        controller.close();
+      }
+    },
+  });
 
-  return NextResponse.json({
-    resposta,
-    sugestoes: SUGESTOES[classe] ?? [],
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+    },
   });
 }

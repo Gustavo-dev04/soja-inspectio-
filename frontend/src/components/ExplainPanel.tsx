@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { explainClass, type ChatMsg } from "@/lib/api";
+import { explainClassStream, type ChatMsg } from "@/lib/api";
 import { CLASS_LABELS } from "@/components/DefectTable";
 import InspectionLogo from "@/components/InspectionLogo";
 
@@ -35,27 +35,47 @@ export default function ExplainPanel({ classe, modo }: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
 
+  function appendToLastAssistant(chunk: string) {
+    setMessages((m) => {
+      const copy = m.slice();
+      const last = copy[copy.length - 1];
+      if (last && last.role === "assistant") {
+        copy[copy.length - 1] = { ...last, content: last.content + chunk };
+      }
+      return copy;
+    });
+  }
+
   async function send(text: string) {
     const q = text.trim();
     if (!q || loading) return;
     const historico = messages.slice(-8);
-    setMessages((m) => [...m, { role: "user", content: q }]);
+    setMessages((m) => [...m, { role: "user", content: q }, { role: "assistant", content: "" }]);
     setInput("");
     setLoading(true);
     try {
-      const res = await explainClass(classe, q, modo, historico);
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: res.resposta || "Não obtive uma resposta." },
-      ]);
+      await explainClassStream(classe, q, modo, historico, appendToLastAssistant);
     } catch {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: "Não consegui responder agora. Tente de novo em instantes." },
-      ]);
+      setMessages((m) => {
+        const copy = m.slice();
+        const last = copy[copy.length - 1];
+        const msg = "Não consegui responder agora. Tente de novo em instantes.";
+        if (last && last.role === "assistant" && !last.content) {
+          copy[copy.length - 1] = { role: "assistant", content: msg };
+        } else {
+          copy.push({ role: "assistant", content: msg });
+        }
+        return copy;
+      });
     } finally {
       setLoading(false);
     }
+  }
+
+  function clear() {
+    if (loading) return;
+    setMessages([]);
+    setInput("");
   }
 
   return (
@@ -66,9 +86,20 @@ export default function ExplainPanel({ classe, modo }: Props) {
         <h4 className="text-sm font-medium text-neutral-100">
           Pergunte à Vígil<span className="text-brand">.ia</span> sobre {label}
         </h4>
-        <span className="ml-auto rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
-          Llama 3.3
-        </span>
+        <div className="ml-auto flex items-center gap-3">
+          {messages.length > 0 && (
+            <button
+              onClick={clear}
+              disabled={loading}
+              className="text-xs text-neutral-500 underline-offset-2 transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40"
+            >
+              limpar
+            </button>
+          )}
+          <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
+            Llama 3.3
+          </span>
+        </div>
       </div>
 
       {/* thread */}
@@ -79,31 +110,38 @@ export default function ExplainPanel({ classe, modo }: Props) {
           </p>
         )}
 
-        {messages.map((m, i) =>
-          m.role === "user" ? (
-            <div key={i} className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-brand/15 px-3.5 py-2 text-sm text-neutral-100">
-                {m.content}
+        {messages.map((m, i) => {
+          const isLast = i === messages.length - 1;
+          if (m.role === "user") {
+            return (
+              <div key={i} className="flex justify-end">
+                <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-brand/15 px-3.5 py-2 text-sm text-neutral-100">
+                  {m.content}
+                </div>
               </div>
-            </div>
-          ) : (
+            );
+          }
+          return (
             <div key={i} className="flex justify-start">
               <div className="max-w-[90%] whitespace-pre-line rounded-2xl rounded-bl-sm bg-white/[0.04] px-3.5 py-2 text-sm leading-relaxed text-neutral-200">
-                {m.content}
+                {m.content === "" ? (
+                  <span className="inline-flex items-center gap-1 py-1">
+                    <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" />
+                    <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" style={{ animationDelay: "0.15s" }} />
+                    <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" style={{ animationDelay: "0.3s" }} />
+                  </span>
+                ) : (
+                  <>
+                    {m.content}
+                    {loading && isLast && (
+                      <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-neutral-400 align-middle" />
+                    )}
+                  </>
+                )}
               </div>
             </div>
-          )
-        )}
-
-        {loading && (
-          <div className="flex justify-start">
-            <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-white/[0.04] px-4 py-3">
-              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" />
-              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" style={{ animationDelay: "0.15s" }} />
-              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" style={{ animationDelay: "0.3s" }} />
-            </div>
-          </div>
-        )}
+          );
+        })}
       </div>
 
       {/* sugestões (só com a conversa vazia) */}
