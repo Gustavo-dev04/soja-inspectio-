@@ -44,10 +44,16 @@ const SUGESTOES: Record<string, string[]> = {
   ],
 };
 
+interface ChatMsg {
+  role: "user" | "assistant";
+  content: string;
+}
+
 interface ExplainBody {
   classe: string;
   pergunta?: string;
   modo?: "academico" | "industrial";
+  historico?: ChatMsg[];
 }
 
 export async function POST(req: NextRequest) {
@@ -66,22 +72,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: "JSON inválido" }, { status: 422 });
   }
 
-  const { classe, pergunta, modo = "academico" } = body;
+  const { classe, pergunta, modo = "academico", historico = [] } = body;
   const classePt = CLASS_PT[classe] ?? classe;
 
   const modoInstrucao =
     modo === "academico"
-      ? "Use linguagem técnico-científica. Mencione processos fisiológicos, impactos nutricionais e parâmetros de qualidade segundo normas do MAPA. Resposta em até 4 parágrafos."
-      : "Seja direto e objetivo. Foque em impacto comercial, tolerâncias da Tabela de Classificação MAPA/CONAB e ações corretivas imediatas no campo ou silo. Resposta em até 3 parágrafos curtos.";
+      ? "Use linguagem técnico-científica. Mencione processos fisiológicos, impactos nutricionais e parâmetros de qualidade segundo normas do MAPA. Seja conciso: até 3 parágrafos."
+      : "Seja direto e objetivo. Foque em impacto comercial, tolerâncias da Tabela de Classificação MAPA/CONAB e ações corretivas imediatas no campo ou silo. Até 3 parágrafos curtos.";
 
   const perguntaFinal =
     pergunta ??
     `Por que o grão de soja está classificado como '${classePt}' e quais são as principais causas?`;
 
   const system =
-    "Você é um especialista em agronomia com foco em produção e qualidade de grãos de soja. " +
-    "Responda sempre em português brasileiro. " +
+    "Você é a Vígil.ia, especialista em agronomia com foco em produção e qualidade de grãos de soja. " +
+    `O grão em análise foi classificado como '${classePt}'. ` +
+    "Responda sempre em português brasileiro, de forma conversacional, mantendo o contexto das mensagens anteriores. " +
     modoInstrucao;
+
+  // histórico recente (limitado) + a pergunta atual
+  const hist = (Array.isArray(historico) ? historico : [])
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && m.content)
+    .slice(-8)
+    .map((m) => ({ role: m.role, content: String(m.content).slice(0, 2000) }));
 
   let resp: Response;
   try {
@@ -95,10 +108,8 @@ export async function POST(req: NextRequest) {
         model: MODEL,
         messages: [
           { role: "system", content: system },
-          {
-            role: "user",
-            content: `Grão classificado como: ${classePt}. Pergunta: ${perguntaFinal}`,
-          },
+          ...hist,
+          { role: "user", content: perguntaFinal },
         ],
         max_tokens: 512,
         temperature: 0.4,

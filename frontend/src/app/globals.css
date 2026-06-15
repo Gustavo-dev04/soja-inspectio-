@@ -113,6 +113,23 @@ body {
   }
 }
 
+/* ——— indicador "digitando" do chat ——— */
+.typing-dot {
+  animation: typing 1.2s infinite ease-in-out;
+}
+@keyframes typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
 /* ——— barra de % da tabela preenchendo ——— */
 .animate-bar {
   background-repeat: no-repeat;

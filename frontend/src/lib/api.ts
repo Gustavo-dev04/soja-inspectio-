@@ -66,17 +66,23 @@ function hostOf(url: string): string {
 }
 
 
+export interface ChatMsg {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export async function explainClass(
   classe: string,
-  pergunta?: string,
-  modo: "academico" | "industrial" = "academico"
+  pergunta: string | undefined,
+  modo: "academico" | "industrial" = "academico",
+  historico: ChatMsg[] = []
 ): Promise<ExplainResponse> {
-  // /explain roda como API route do Next.js (Phi-4-mini via GitHub Models),
-  // na mesma origem da Vercel — não usa NEXT_PUBLIC_API_URL (esse é só pro /inspect/YOLO).
+  // /explain roda como API route do Next.js (Groq · Llama 3.3) na mesma origem
+  // da Vercel — não usa NEXT_PUBLIC_API_URL (esse é só pro /inspect/YOLO).
   const res = await fetch(`/api/explain`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ classe, pergunta, modo }),
+    body: JSON.stringify({ classe, pergunta, modo, historico }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

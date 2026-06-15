@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { explainClass, type ExplainResponse } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { explainClass, type ChatMsg } from "@/lib/api";
 import { CLASS_LABELS } from "@/components/DefectTable";
 import InspectionLogo from "@/components/InspectionLogo";
 
@@ -9,7 +9,7 @@ interface Props {
   modo: "academico" | "industrial";
 }
 
-// Perguntas iniciais (a IA é OPCIONAL — só roda quando o usuário clica numa).
+// Sugestões iniciais (atalhos) — a partir daí é tudo digitando.
 function starterQuestions(label: string, modo: Props["modo"]): string[] {
   const l = label.toLowerCase();
   if (modo === "industrial") {
@@ -19,122 +19,141 @@ function starterQuestions(label: string, modo: Props["modo"]): string[] {
       "Que ação operacional tomar?",
     ];
   }
-  return [
-    `O que caracteriza ${l}?`,
-    "Quais as causas agronômicas?",
-    "Como reduzir na lavoura?",
-  ];
+  return [`O que caracteriza ${l}?`, "Quais as causas agronômicas?", "Como reduzir na lavoura?"];
 }
 
 export default function ExplainPanel({ classe, modo }: Props) {
-  const [data, setData] = useState<ExplainResponse | null>(null);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [perguntaAtiva, setPerguntaAtiva] = useState<string | undefined>(undefined);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const label = CLASS_LABELS[classe] ?? classe;
   const starters = starterQuestions(label, modo);
 
-  async function ask(pergunta: string) {
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading]);
+
+  async function send(text: string) {
+    const q = text.trim();
+    if (!q || loading) return;
+    const historico = messages.slice(-8);
+    setMessages((m) => [...m, { role: "user", content: q }]);
+    setInput("");
     setLoading(true);
-    setPerguntaAtiva(pergunta);
     try {
-      const result = await explainClass(classe, pergunta, modo);
-      setData(result);
+      const res = await explainClass(classe, q, modo, historico);
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: res.resposta || "Não obtive uma resposta." },
+      ]);
     } catch {
-      setData({
-        resposta:
-          "Não foi possível obter a explicação agora. Tente novamente em instantes.",
-        sugestoes: [],
-      });
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: "Não consegui responder agora. Tente de novo em instantes." },
+      ]);
     } finally {
       setLoading(false);
     }
   }
 
-  function reset() {
-    setData(null);
-    setPerguntaAtiva(undefined);
-  }
-
-  const chip = (q: string, active: boolean) =>
-    `text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
-      active
-        ? "bg-brand text-neutral-950 border-brand"
-        : "border-white/15 text-neutral-300 hover:border-brand hover:text-brand"
-    }`;
-
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h4 className="text-sm font-medium text-neutral-100">
-            Pergunte à Vígil<span className="text-brand">.ia</span> sobre {label}
-          </h4>
-          <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
-            opcional
-          </span>
-        </div>
-        {data && !loading && (
-          <button
-            onClick={reset}
-            className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-300 hover:underline"
-          >
-            limpar
-          </button>
+    <div className="flex flex-col overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+      {/* cabeçalho */}
+      <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
+        <InspectionLogo inspecting={loading} className="w-5 text-neutral-200" />
+        <h4 className="text-sm font-medium text-neutral-100">
+          Pergunte à Vígil<span className="text-brand">.ia</span> sobre {label}
+        </h4>
+        <span className="ml-auto rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-neutral-500">
+          Llama 3.3
+        </span>
+      </div>
+
+      {/* thread */}
+      <div ref={scrollRef} className="max-h-80 space-y-3 overflow-y-auto px-4 py-4">
+        {messages.length === 0 && !loading && (
+          <p className="text-xs text-neutral-500">
+            Digite uma pergunta sobre {label.toLowerCase()} ou toque numa sugestão abaixo.
+          </p>
+        )}
+
+        {messages.map((m, i) =>
+          m.role === "user" ? (
+            <div key={i} className="flex justify-end">
+              <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-brand/15 px-3.5 py-2 text-sm text-neutral-100">
+                {m.content}
+              </div>
+            </div>
+          ) : (
+            <div key={i} className="flex justify-start">
+              <div className="max-w-[90%] whitespace-pre-line rounded-2xl rounded-bl-sm bg-white/[0.04] px-3.5 py-2 text-sm leading-relaxed text-neutral-200">
+                {m.content}
+              </div>
+            </div>
+          )
+        )}
+
+        {loading && (
+          <div className="flex justify-start">
+            <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-white/[0.04] px-4 py-3">
+              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" />
+              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" style={{ animationDelay: "0.15s" }} />
+              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-neutral-400" style={{ animationDelay: "0.3s" }} />
+            </div>
+          </div>
         )}
       </div>
 
-      {/* estado: gerando — símbolo girando */}
-      {loading ? (
-        <div className="flex flex-col items-center gap-3 py-8 text-center">
-          <InspectionLogo inspecting className="w-12 text-neutral-200" />
-          <p className="animate-pulse text-sm text-neutral-400">
-            Gerando resposta…
-          </p>
-          {perguntaAtiva && (
-            <p className="max-w-sm text-xs text-neutral-600">“{perguntaAtiva}”</p>
-          )}
-        </div>
-      ) : data ? (
-        /* estado: resposta pronta */
-        <div className="mt-4 space-y-4">
-          {perguntaAtiva && (
-            <p className="text-sm font-medium text-neutral-300">“{perguntaAtiva}”</p>
-          )}
-          <p className="whitespace-pre-line text-sm leading-relaxed text-neutral-200">
-            {data.resposta}
-          </p>
-
-          {data.sugestoes.length > 0 && (
-            <div className="space-y-2 pt-1">
-              <p className="text-[11px] uppercase tracking-wider text-neutral-500">
-                Continuar perguntando
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {data.sugestoes.map((s) => (
-                  <button key={s} onClick={() => ask(s)} className={chip(s, false)}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        /* estado inicial: perguntinhas (não chama a IA até clicar) */
-        <div className="mt-4 space-y-3">
-          <p className="text-xs text-neutral-500">
-            Toque numa pergunta para a Vígil.ia gerar uma explicação.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {starters.map((s) => (
-              <button key={s} onClick={() => ask(s)} className={chip(s, false)}>
-                {s}
-              </button>
-            ))}
-          </div>
+      {/* sugestões (só com a conversa vazia) */}
+      {messages.length === 0 && !loading && (
+        <div className="flex flex-wrap gap-2 px-4 pb-3">
+          {starters.map((s) => (
+            <button
+              key={s}
+              onClick={() => send(s)}
+              className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-neutral-300 transition-colors hover:border-brand hover:text-brand"
+            >
+              {s}
+            </button>
+          ))}
         </div>
       )}
+
+      {/* barra de digitação */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(input);
+        }}
+        className="flex items-end gap-2 border-t border-white/10 p-3"
+      >
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send(input);
+            }
+          }}
+          rows={1}
+          placeholder={`Pergunte sobre ${label.toLowerCase()}…`}
+          className="max-h-32 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-white/25 focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={loading || !input.trim()}
+          aria-label="Enviar"
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-neutral-100 text-neutral-900 transition-opacity hover:bg-white disabled:opacity-30"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 19V5" />
+            <path d="m5 12 7-7 7 7" />
+          </svg>
+        </button>
+      </form>
     </div>
   );
 }
