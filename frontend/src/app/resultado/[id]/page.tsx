@@ -70,16 +70,28 @@ export default function ResultadoPage() {
 
   return (
     <div className="space-y-7">
-      {/* Header + mode toggle */}
-      <div className="reveal flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
-          <h2 className="text-2xl font-medium tracking-tight text-neutral-100">
-            Resultado da inspeção
-          </h2>
-          <p className="mt-0.5 font-mono text-xs text-neutral-600">{id}</p>
-        </div>
+      {/* Nova inspeção + header + mode toggle */}
+      <div className="reveal space-y-5">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-sm text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+          Nova inspeção
+        </Link>
 
-        <div className="inline-flex gap-1 self-start rounded-lg border border-white/10 bg-white/[0.03] p-1 sm:self-auto">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+          <div>
+            <h2 className="text-2xl font-medium tracking-tight text-neutral-100">
+              Resultado da inspeção
+            </h2>
+            <p className="mt-0.5 font-mono text-xs text-neutral-600">{id}</p>
+          </div>
+
+          <div className="inline-flex gap-1 self-start rounded-lg border border-white/10 bg-white/[0.03] p-1 sm:self-auto">
           <button
             onClick={() => setModo("academico")}
             className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
@@ -100,6 +112,7 @@ export default function ResultadoPage() {
           >
             Industrial
           </button>
+          </div>
         </div>
       </div>
 
@@ -210,18 +223,6 @@ export default function ResultadoPage() {
           )}
         </div>
       </div>
-
-      {/* Botão fixo: fechar o ciclo com uma nova inspeção */}
-      <Link
-        href="/"
-        className="fixed bottom-6 right-6 z-40 inline-flex items-center gap-2 rounded-full bg-neutral-100 px-5 py-3 text-sm font-medium text-neutral-900 shadow-lg shadow-black/40 transition-transform hover:scale-[1.03] active:scale-95"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 5v14" />
-          <path d="M5 12h14" />
-        </svg>
-        Nova inspeção
-      </Link>
     </div>
   );
 }
