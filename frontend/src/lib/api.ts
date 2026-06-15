@@ -21,9 +21,9 @@ export interface ExplainResponse {
   sugestoes: string[];
 }
 
-export async function inspectImage(file: File): Promise<InspectResponse> {
-  const b64 = await fileToBase64(file);
-
+export async function inspectImage(imageBase64: string): Promise<InspectResponse> {
+  // `imageBase64` já é o data URL lido do arquivo (uma única leitura, feita no
+  // componente). O backend remove o prefixo "data:...;base64," se houver.
   let res: Response;
   try {
     const ctrl = new AbortController();
@@ -32,7 +32,7 @@ export async function inspectImage(file: File): Promise<InspectResponse> {
       res = await fetch(`${API_URL}/inspect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: b64, imagem_url: "" }),
+        body: JSON.stringify({ image: imageBase64, imagem_url: "" }),
         signal: ctrl.signal,
       });
     } finally {
@@ -65,6 +65,7 @@ function hostOf(url: string): string {
   }
 }
 
+
 export async function explainClass(
   classe: string,
   pergunta?: string,
@@ -82,14 +83,4 @@ export async function explainClass(
     throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<ExplainResponse>;
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () =>
-      reject(new Error("Não consegui ler o arquivo de imagem. Tente outra foto."));
-    reader.readAsDataURL(file);
-  });
 }

@@ -20,8 +20,8 @@ export default function InspectHero() {
       setLoading(true);
       setError(null);
       try {
-        const dataUrl = await fileToDataUrl(file);
-        const result = await inspectImage(file);
+        const dataUrl = await fileToDataUrl(file); // leitura única, reusada abaixo
+        const result = await inspectImage(dataUrl);
         sessionStorage.setItem(
           `inspection_${result.id}`,
           JSON.stringify({ ...result, imageDataUrl: dataUrl })
