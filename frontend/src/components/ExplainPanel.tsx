@@ -69,6 +69,18 @@ export default function ExplainPanel({ classe, modo }: Props) {
     setLoading(true);
     try {
       await explainClassStream(classe, q, modo, historico, appendToLastAssistant);
+      // evita balão vazio preso caso o stream não traga conteúdo
+      setMessages((m) => {
+        const copy = m.slice();
+        const last = copy[copy.length - 1];
+        if (last && last.role === "assistant" && !last.content) {
+          copy[copy.length - 1] = {
+            role: "assistant",
+            content: "Não recebi resposta. Tente reformular a pergunta.",
+          };
+        }
+        return copy;
+      });
     } catch {
       setMessages((m) => {
         const copy = m.slice();

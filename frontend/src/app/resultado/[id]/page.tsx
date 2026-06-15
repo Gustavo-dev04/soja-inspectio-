@@ -23,13 +23,22 @@ export default function ResultadoPage() {
   const [classeAtiva, setClasseAtiva] = useState<string | null>(null);
 
   useEffect(() => {
-    const cached = sessionStorage.getItem(`inspection_${id}`);
+    let cached: string | null = null;
+    try {
+      cached = sessionStorage.getItem(`inspection_${id}`);
+    } catch {
+      /* storage indisponível — cai pro Supabase abaixo */
+    }
     if (cached) {
-      const parsed = JSON.parse(cached) as StoredResult;
-      setData(parsed);
-      const firstClass = Object.keys(parsed.class_counts)[0] ?? null;
-      setClasseAtiva(firstClass);
-      return;
+      try {
+        const parsed = JSON.parse(cached) as StoredResult;
+        setData(parsed);
+        const firstClass = Object.keys(parsed.class_counts)[0] ?? null;
+        setClasseAtiva(firstClass);
+        return;
+      } catch {
+        /* cache corrompido — segue pro Supabase */
+      }
     }
 
     supabase

@@ -13,8 +13,15 @@ export default function IntroSplash() {
 
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const seen = sessionStorage.getItem("vigil_intro");
-    sessionStorage.setItem("vigil_intro", "1");
+    let seen = false;
+    // sessionStorage pode lançar (Safari/modo privado). Se falhar, toca a intro
+    // mesmo assim — o importante é SEMPRE agendar o fim pra não travar o site.
+    try {
+      seen = !!sessionStorage.getItem("vigil_intro");
+      sessionStorage.setItem("vigil_intro", "1");
+    } catch {
+      /* storage indisponível — segue tocando a abertura */
+    }
     const hold = seen ? 150 : reduce ? 500 : 2700;
     const t1 = setTimeout(() => setLeaving(true), hold);
     const t2 = setTimeout(() => setDone(true), hold + 650);
