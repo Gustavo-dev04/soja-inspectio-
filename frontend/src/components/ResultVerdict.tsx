@@ -7,6 +7,7 @@ interface Props {
   confidence: number;   // 0..1
   totalGraos: number;
   single: boolean;      // true = modo 1 grão
+  defect: boolean;      // dominante != intacto
 }
 
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
@@ -17,6 +18,7 @@ export default function ResultVerdict({
   confidence,
   totalGraos,
   single,
+  defect,
 }: Props) {
   const [shown, setShown] = useState(0);
   const raf = useRef<number>();
@@ -52,11 +54,33 @@ export default function ResultVerdict({
 
   return (
     <div className="reveal relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-      {/* glow suave na cor da classe */}
+      {/* glow suave na cor da classe / status */}
       <div
         className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full blur-3xl"
-        style={{ background: color, opacity: 0.13 }}
+        style={{ background: defect ? color : "#22c55e", opacity: 0.13 }}
       />
+
+      {/* status: íntegro x defeito */}
+      <span
+        className="absolute right-4 top-4 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium"
+        style={{
+          color: defect ? color : "#22c55e",
+          borderColor: `${defect ? color : "#22c55e"}55`,
+          background: `${defect ? color : "#22c55e"}14`,
+        }}
+      >
+        {defect ? (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+            <path d="M12 9v4" /><path d="M12 17h.01" />
+          </svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        )}
+        {defect ? "Defeito" : "Íntegro"}
+      </span>
 
       <div className="relative flex items-center gap-6">
         {/* anel de confiança */}

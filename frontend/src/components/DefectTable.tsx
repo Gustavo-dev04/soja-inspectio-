@@ -33,15 +33,17 @@ export default function DefectTable({ classCounts, totalGraos }: Props) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(([cls, count]) => {
+          {rows.map(([cls, count], i) => {
             const pct = totalGraos > 0 ? (count / totalGraos) * 100 : 0;
             const c = CLASS_COLORS[cls] ?? "#6b7280";
             return (
             <tr
               key={cls}
-              className="border-t border-white/10 text-neutral-200 transition-colors hover:bg-white/[0.02]"
+              className="animate-bar border-t border-white/10 text-neutral-200 transition-colors hover:bg-white/[0.02]"
               style={{
                 background: `linear-gradient(to right, ${c}1f ${pct}%, transparent ${pct}%)`,
+                backgroundSize: "100% 100%",
+                animationDelay: `${120 + i * 90}ms`,
               }}
             >
               <td className="px-4 py-3">

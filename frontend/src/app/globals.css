@@ -113,6 +113,20 @@ body {
   }
 }
 
+/* ——— barra de % da tabela preenchendo ——— */
+.animate-bar {
+  background-repeat: no-repeat;
+  animation: bar-grow 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes bar-grow {
+  from {
+    background-size: 0% 100%;
+  }
+  to {
+    background-size: 100% 100%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spin-fast,
   .spin-slow,
@@ -121,7 +135,8 @@ body {
   .intro-fade,
   .intro-word,
   .intro-word-2,
-  .reveal {
+  .reveal,
+  .animate-bar {
     animation: none;
   }
   .intro-draw {
@@ -132,5 +147,8 @@ body {
   .intro-word-2,
   .reveal {
     opacity: 1;
+  }
+  .animate-bar {
+    background-size: 100% 100%;
   }
 }

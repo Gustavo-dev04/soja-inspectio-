@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import BoundingBoxCanvas from "@/components/BoundingBoxCanvas";
@@ -110,6 +111,7 @@ export default function ResultadoPage() {
           confidence={domConf}
           totalGraos={data.total_graos}
           single={single}
+          defect={dominant !== "intact"}
         />
       )}
 
@@ -208,6 +210,18 @@ export default function ResultadoPage() {
           )}
         </div>
       </div>
+
+      {/* Botão fixo: fechar o ciclo com uma nova inspeção */}
+      <Link
+        href="/"
+        className="fixed bottom-6 right-6 z-40 inline-flex items-center gap-2 rounded-full bg-neutral-100 px-5 py-3 text-sm font-medium text-neutral-900 shadow-lg shadow-black/40 transition-transform hover:scale-[1.03] active:scale-95"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
+        Nova inspeção
+      </Link>
     </div>
   );
 }
