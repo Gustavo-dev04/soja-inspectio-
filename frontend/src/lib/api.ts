@@ -23,16 +23,46 @@ export interface ExplainResponse {
 
 export async function inspectImage(file: File): Promise<InspectResponse> {
   const b64 = await fileToBase64(file);
-  const res = await fetch(`${API_URL}/inspect`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image: b64, imagem_url: "" }),
-  });
+
+  let res: Response;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90_000); // cold start do HF Space
+    try {
+      res = await fetch(`${API_URL}/inspect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: b64, imagem_url: "" }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(
+        "O servidor de visão demorou demais para responder (pode estar acordando). Tente de novo em alguns segundos."
+      );
+    }
+    const host = hostOf(API_URL);
+    throw new Error(
+      `Não consegui falar com o servidor de visão${host ? ` (${host})` : ""}. Verifique se ele está no ar.`
+    );
+  }
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
+    const err = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(err.detail ?? `Erro do servidor de visão (HTTP ${res.status}).`);
   }
   return res.json() as Promise<InspectResponse>;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 export async function explainClass(
@@ -58,7 +88,8 @@ function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
+    reader.onerror = () =>
+      reject(new Error("Não consegui ler o arquivo de imagem. Tente outra foto."));
     reader.readAsDataURL(file);
   });
 }

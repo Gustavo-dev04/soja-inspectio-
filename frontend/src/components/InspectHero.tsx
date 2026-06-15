@@ -28,7 +28,14 @@ export default function InspectHero() {
         );
         router.push(`/resultado/${result.id}`);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Erro desconhecido.");
+        console.error("Falha na inspeção:", e);
+        const msg =
+          e instanceof Error
+            ? e.message
+            : typeof e === "string"
+            ? e
+            : "Erro inesperado ao inspecionar.";
+        setError(msg);
         setLoading(false);
       }
     },
@@ -122,7 +129,7 @@ function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error("Não consegui ler a imagem selecionada."));
     reader.readAsDataURL(file);
   });
 }

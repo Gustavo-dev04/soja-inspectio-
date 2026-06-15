@@ -23,10 +23,13 @@ app = FastAPI(title="Soja Inspection API", version="1.0.0", lifespan=lifespan)
 # /explain (LLM Phi-4-mini) roda na Vercel como API route do Next.js.
 # Este backend cuida só de visão (/inspect) + dados.
 _origins = [o.strip() for o in os.getenv("CORS_ORIGIN", "*").split(",") if o.strip()]
+# Não usamos cookies/credenciais no /inspect. Com credentials=True o wildcard "*"
+# vira inválido pelo spec de CORS (o browser bloqueia a resposta mesmo com 200).
+# Mantendo credentials=False, o "*" funciona pra qualquer origem da Vercel.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins or ["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
