@@ -20,12 +20,11 @@ export default function InspectHero() {
       setLoading(true);
       setError(null);
       try {
-        const dataUrl = await fileToDataUrl(file); // leitura única, reusada abaixo
+        // reduz a imagem 1x: cabe no sessionStorage e deixa o upload leve
+        // (o modelo classifica a 224px, então não perde nada).
+        const dataUrl = await fileToDownscaledDataUrl(file);
         const result = await inspectImage(dataUrl);
-        sessionStorage.setItem(
-          `inspection_${result.id}`,
-          JSON.stringify({ ...result, imageDataUrl: dataUrl })
-        );
+        storeInspection(result.id, { ...result, imageDataUrl: dataUrl });
         router.push(`/resultado/${result.id}`);
       } catch (e: unknown) {
         console.error("Falha na inspeção:", e);
@@ -125,11 +124,53 @@ export default function InspectHero() {
   );
 }
 
-function fileToDataUrl(file: File): Promise<string> {
+// Lê o arquivo UMA vez e reduz para no máx. `maxDim` px (JPEG), evitando estourar
+// a quota do sessionStorage e aliviando o upload. O modelo usa 224px, então o
+// downscale não afeta a classificação.
+function fileToDownscaledDataUrl(file: File, maxDim = 1280, quality = 0.85): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error("Não consegui ler a imagem selecionada."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Imagem inválida. Tente outra foto."));
+      img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Não consegui processar a imagem neste navegador."));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result as string;
+    };
     reader.readAsDataURL(file);
   });
+}
+
+// Salva no sessionStorage com resiliência a quota: limpa inspeções antigas e,
+// no pior caso, guarda o resultado sem a imagem (a tela de resultado lida com isso).
+function storeInspection(id: string, payload: object) {
+  const key = `inspection_${id}`;
+  const json = JSON.stringify(payload);
+  try {
+    sessionStorage.setItem(key, json);
+    return;
+  } catch {
+    for (const k of Object.keys(sessionStorage)) {
+      if (k.startsWith("inspection_") && k !== key) sessionStorage.removeItem(k);
+    }
+  }
+  try {
+    sessionStorage.setItem(key, json);
+  } catch {
+    sessionStorage.setItem(key, JSON.stringify({ ...payload, imageDataUrl: "" }));
+  }
 }
