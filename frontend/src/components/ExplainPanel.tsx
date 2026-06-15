@@ -127,7 +127,7 @@ export default function ExplainPanel({ classe, modo }: Props) {
           onClick={() => setExpanded((e) => !e)}
           aria-label={expanded ? "Recolher" : "Tela cheia"}
           title={expanded ? "Recolher" : "Tela cheia"}
-          className="text-neutral-400 transition-colors hover:text-neutral-100"
+          className="-mr-1 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-300 transition-colors hover:bg-white/5 hover:text-neutral-100"
         >
           {expanded ? (
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -150,7 +150,9 @@ export default function ExplainPanel({ classe, modo }: Props) {
   const thread = (
     <div
       ref={scrollRef}
-      className={`space-y-3 overflow-y-auto px-4 py-4 ${expanded ? "flex-1" : "max-h-80"}`}
+      className={`space-y-3 overflow-y-auto px-4 py-4 ${
+        expanded ? "min-h-0 flex-1" : "max-h-80"
+      }`}
     >
       {messages.length === 0 && !loading && (
         <p className="text-xs text-neutral-500">
@@ -214,7 +216,7 @@ export default function ExplainPanel({ classe, modo }: Props) {
         e.preventDefault();
         send(input);
       }}
-      className="flex items-end gap-2 border-t border-white/10 p-3"
+      className="flex items-end gap-2 border-t border-white/10 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
     >
       <textarea
         value={input}
@@ -259,7 +261,7 @@ export default function ExplainPanel({ classe, modo }: Props) {
         onClick={() => setExpanded(false)}
       >
         <div
-          className="mx-auto flex h-full w-full max-w-2xl flex-col overflow-hidden border border-white/10 bg-[#0c0c0d] sm:rounded-2xl"
+          className="mx-auto flex h-full max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden border border-white/10 bg-[#0c0c0d] sm:rounded-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           {body}

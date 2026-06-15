@@ -2,6 +2,10 @@
 import { useEffect, useState } from "react";
 import InspectionLogo from "@/components/InspectionLogo";
 
+// Memória de sessão à prova de falha: se o sessionStorage não der (Safari/
+// modo privado), ainda evita repetir a abertura a cada navegação na SPA.
+let introPlayed = false;
+
 /**
  * Abertura do site. Renderiza JÁ no primeiro paint (cobre tudo com fundo preto),
  * então não há flash do hero antes da animação. Toca por completo na 1ª vez da
@@ -13,15 +17,16 @@ export default function IntroSplash() {
 
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let seen = false;
+    let seen = introPlayed;
     // sessionStorage pode lançar (Safari/modo privado). Se falhar, toca a intro
     // mesmo assim — o importante é SEMPRE agendar o fim pra não travar o site.
     try {
-      seen = !!sessionStorage.getItem("vigil_intro");
+      seen = seen || !!sessionStorage.getItem("vigil_intro");
       sessionStorage.setItem("vigil_intro", "1");
     } catch {
       /* storage indisponível — segue tocando a abertura */
     }
+    introPlayed = true;
     const hold = seen ? 150 : reduce ? 500 : 2700;
     const t1 = setTimeout(() => setLeaving(true), hold);
     const t2 = setTimeout(() => setDone(true), hold + 650);
