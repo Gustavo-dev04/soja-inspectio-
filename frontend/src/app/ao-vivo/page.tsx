@@ -1,13 +1,14 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { inspectImage } from "@/lib/api";
+import { warmupOnnx, classifyCanvas } from "@/lib/onnx";
 import { CLASS_LABELS, CLASS_COLORS } from "@/components/DefectTable";
 
 const PREMIUM_CONF = 0.8; // grão só é Premium se intacto E confiança >= 80%
 
 type Status = "premium" | "review" | "defect";
 type Verdict = { status: Status; label: string; color: string; conf: number };
+type Phase = "idle" | "loading" | "live" | "error";
 
 const STATUS_TXT: Record<Status, string> = {
   premium: "PREMIUM",
@@ -17,76 +18,67 @@ const STATUS_TXT: Record<Status, string> = {
 
 export default function AoVivoPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cropRef = useRef<HTMLCanvasElement>(null); // 224x224 (center-crop)
   const runningRef = useRef(false);
-  const warmRef = useRef(false);
+  const inFlightRef = useRef(false);
+  const rafRef = useRef<number>();
 
-  const [running, setRunning] = useState(false);
-  const [phase, setPhase] = useState<"idle" | "warming" | "live" | "error">("idle");
+  const [phase, setPhase] = useState<Phase>("idle");
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [latency, setLatency] = useState(0);
+  const [ms, setMs] = useState(0);
 
-  const grab = useCallback((): string | null => {
+  const drawCenter224 = useCallback((): boolean => {
     const v = videoRef.current;
-    const c = canvasRef.current;
-    if (!v || !c || !v.videoWidth) return null;
-    const maxDim = 384;
-    const scale = Math.min(1, maxDim / Math.max(v.videoWidth, v.videoHeight));
-    const w = Math.round(v.videoWidth * scale);
-    const h = Math.round(v.videoHeight * scale);
-    c.width = w;
-    c.height = h;
+    const c = cropRef.current;
+    if (!v || !c || !v.videoWidth) return false;
+    const side = Math.min(v.videoWidth, v.videoHeight);
+    const sx = (v.videoWidth - side) / 2;
+    const sy = (v.videoHeight - side) / 2;
     const ctx = c.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(v, 0, 0, w, h);
-    return c.toDataURL("image/jpeg", 0.7);
+    if (!ctx) return false;
+    ctx.drawImage(v, sx, sy, side, side, 0, 0, 224, 224); // center-crop + resize
+    return true;
   }, []);
 
-  const loop = useCallback(async () => {
+  const tick = useCallback(async () => {
     if (!runningRef.current) return;
-    const frame = grab();
-    if (!frame) {
-      setTimeout(loop, 200);
-      return;
-    }
-    const t0 = performance.now();
-    try {
-      const r = await inspectImage(frame, {
-        persist: false,
-        timeoutMs: warmRef.current ? 15000 : 90000,
-      });
-      warmRef.current = true;
-      setLatency(Math.round(performance.now() - t0));
-      const d = r.detections[0];
-      if (d) {
-        const isIntact = d.class === "intact";
+    if (!inFlightRef.current && cropRef.current && drawCenter224()) {
+      inFlightRef.current = true;
+      const t0 = performance.now();
+      try {
+        const { cls, conf } = await classifyCanvas(cropRef.current);
+        setMs(Math.round(performance.now() - t0));
+        const isIntact = cls === "intact";
         const status: Status = isIntact
-          ? d.confidence >= PREMIUM_CONF
+          ? conf >= PREMIUM_CONF
             ? "premium"
             : "review"
           : "defect";
         setVerdict({
           status,
-          label: CLASS_LABELS[d.class] ?? d.class,
+          label: CLASS_LABELS[cls] ?? cls,
           color:
             status === "premium"
               ? "#22c55e"
               : status === "review"
               ? "#f59e0b"
-              : CLASS_COLORS[d.class] ?? "#ef4444",
-          conf: d.confidence,
+              : CLASS_COLORS[cls] ?? "#ef4444",
+          conf,
         });
+        setPhase("live");
+      } catch {
+        /* ignora um frame que falhou */
+      } finally {
+        inFlightRef.current = false;
       }
-      setPhase("live");
-    } catch {
-      // não derruba o loop por causa de um frame que falhou
     }
-    if (runningRef.current) setTimeout(loop, 120);
-  }, [grab]);
+    rafRef.current = requestAnimationFrame(tick);
+  }, [drawCenter224]);
 
   const start = useCallback(async () => {
     setError(null);
+    setPhase("loading");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
@@ -96,22 +88,22 @@ export default function AoVivoPage() {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+      await warmupOnnx(); // baixa/compila o modelo (≈21 MB na 1ª vez)
       runningRef.current = true;
-      warmRef.current = false;
-      setRunning(true);
-      setPhase("warming");
-      loop();
-    } catch {
+      tick();
+    } catch (e) {
       setPhase("error");
       setError(
-        "Não consegui acessar a câmera. Permita o acesso no navegador (e use HTTPS)."
+        e instanceof Error && e.name === "NotAllowedError"
+          ? "Permissão de câmera negada. Habilite o acesso e tente de novo."
+          : "Não consegui iniciar (câmera ou modelo). Use HTTPS e um navegador atual."
       );
     }
-  }, [loop]);
+  }, [tick]);
 
   const stop = useCallback(() => {
     runningRef.current = false;
-    setRunning(false);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
     setPhase("idle");
     setVerdict(null);
     const v = videoRef.current;
@@ -122,6 +114,8 @@ export default function AoVivoPage() {
 
   useEffect(() => () => stop(), [stop]);
 
+  const running = phase === "live" || phase === "loading";
+
   return (
     <div className="reveal space-y-5">
       <div className="flex items-center justify-between gap-4">
@@ -130,7 +124,8 @@ export default function AoVivoPage() {
             Inspeção ao vivo
           </h2>
           <p className="mt-0.5 text-sm text-neutral-500">
-            Aponte a câmera para um grão — o veredito premium atualiza em tempo real.
+            O modelo roda <b className="text-neutral-300">no seu navegador</b> — tempo
+            real, sem servidor. Aponte para um grão.
           </p>
         </div>
         <Link
@@ -142,15 +137,9 @@ export default function AoVivoPage() {
       </div>
 
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black">
-        <video
-          ref={videoRef}
-          playsInline
-          muted
-          className="aspect-[4/3] w-full object-cover"
-        />
-        <canvas ref={canvasRef} className="hidden" />
+        <video ref={videoRef} playsInline muted className="aspect-[4/3] w-full object-cover" />
+        <canvas ref={cropRef} width={224} height={224} className="hidden" />
 
-        {/* overlay de estado / veredito */}
         {phase === "idle" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/40 text-center">
             <p className="max-w-xs text-sm text-neutral-300">
@@ -165,10 +154,10 @@ export default function AoVivoPage() {
           </div>
         )}
 
-        {phase === "warming" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+        {phase === "loading" && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 p-6 text-center">
             <p className="animate-pulse text-sm text-neutral-200">
-              Aquecendo o modelo… (primeira leitura pode demorar alguns segundos)
+              Carregando o modelo no navegador (≈21 MB, só na 1ª vez)…
             </p>
           </div>
         )}
@@ -179,13 +168,10 @@ export default function AoVivoPage() {
           </div>
         )}
 
-        {/* faixa de veredito ao vivo */}
         {phase === "live" && verdict && (
           <div
             className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 p-4"
-            style={{
-              background: `linear-gradient(to top, ${verdict.color}33, transparent)`,
-            }}
+            style={{ background: `linear-gradient(to top, ${verdict.color}33, transparent)` }}
           >
             <div>
               <p
@@ -199,12 +185,11 @@ export default function AoVivoPage() {
               </p>
             </div>
             <span className="rounded-full border border-white/15 bg-black/40 px-2.5 py-1 font-mono text-[10px] text-neutral-300">
-              {latency} ms/quadro
+              {ms} ms · ~{ms ? Math.round(1000 / ms) : 0} fps
             </span>
           </div>
         )}
 
-        {/* mira central */}
         {running && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="h-40 w-40 rounded-2xl border-2 border-white/30" />
@@ -214,8 +199,7 @@ export default function AoVivoPage() {
 
       <div className="flex items-center justify-between">
         <p className="text-xs text-neutral-600">
-          Inferência no servidor (CPU) → ~2–3 quadros/s. Encha a mira com 1 grão,
-          fundo escuro e luz de cima.
+          Inferência local (onnxruntime-web). Encha a mira com 1 grão, fundo escuro e luz de cima.
         </p>
         {running && (
           <button
