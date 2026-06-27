@@ -18,6 +18,8 @@ build/
 # Exceção: o modelo do deploy fica embutido na imagem Docker do backend (10MB, ok no git)
 !backend/soja_yolo11s_finetuned.pt
 *.onnx
+# Exceção: modelo ONNX servido ao navegador (modo ao vivo)
+!frontend/public/models/soja_yolo11s.onnx
 runs/
 
 # Node
