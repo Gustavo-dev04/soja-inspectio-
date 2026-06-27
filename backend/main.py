@@ -39,6 +39,7 @@ class InspectRequest(BaseModel):
     image: str
     imagem_url: str = ""
     multi: bool = False  # padrão atual: 1 grão; True liga o multi-grão
+    persist: bool = True  # False = não grava no banco (modo câmera ao vivo)
 
 
 class InspectResponse(BaseModel):
@@ -66,6 +67,10 @@ def inspect(body: InspectRequest):
         result = run_inference(image, multi=body.multi)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro de inferência: {exc}")
+
+    # Modo câmera ao vivo (persist=False): não grava — evita flood na tabela.
+    if not body.persist:
+        return InspectResponse(id="live", **result)
 
     payload = {
         "imagem_url": body.imagem_url,

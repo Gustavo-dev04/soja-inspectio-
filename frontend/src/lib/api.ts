@@ -21,18 +21,23 @@ export interface ExplainResponse {
   sugestoes: string[];
 }
 
-export async function inspectImage(imageBase64: string): Promise<InspectResponse> {
+export async function inspectImage(
+  imageBase64: string,
+  opts: { persist?: boolean; timeoutMs?: number } = {}
+): Promise<InspectResponse> {
   // `imageBase64` já é o data URL lido do arquivo (uma única leitura, feita no
   // componente). O backend remove o prefixo "data:...;base64," se houver.
+  // persist=false → modo câmera ao vivo (não grava no banco).
+  const { persist = true, timeoutMs = 90_000 } = opts;
   let res: Response;
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90_000); // cold start do HF Space
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       res = await fetch(`${API_URL}/inspect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: imageBase64, imagem_url: "" }),
+        body: JSON.stringify({ image: imageBase64, imagem_url: "", persist }),
         signal: ctrl.signal,
       });
     } finally {

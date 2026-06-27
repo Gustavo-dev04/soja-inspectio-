@@ -35,6 +35,12 @@ export default function RootLayout({
                 Inspecionar
               </Link>
               <Link
+                href="/ao-vivo"
+                className="text-neutral-400 transition-colors hover:text-neutral-100"
+              >
+                Ao vivo
+              </Link>
+              <Link
                 href="/sobre"
                 className="text-neutral-400 transition-colors hover:text-neutral-100"
               >
