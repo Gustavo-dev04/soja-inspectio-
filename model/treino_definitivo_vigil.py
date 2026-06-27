@@ -1,26 +1,7 @@
-# =============================================================================
-#  Vígil.ia — Treino DEFINITIVO do classificador YOLO11s-cls no domínio real
-#  -----------------------------------------------------------------------------
-#  Self-contained para Google Colab (GPU). Roda de cima a baixo.
-#
-#  O que faz:
-#    1. instala deps e monta o Drive
-#    2. carrega o modelo base treinado no Roboflow (do Drive)
-#    3. junta as fotos reais das DUAS pastas (Lotes + "Soja pra completar"),
-#       mapeia os nomes em português para as classes do modelo,
-#       recorta cada grão (OpenCV) e faz split estratificado train/val/test
-#    4. mede o baseline (antes do fine-tuning)
-#    5. TREINA (receita definitiva: mais épocas + early-stopping + aug forte)
-#    6. avalia em val e test, imprime relatório e salva a matriz de confusão
-#    7. salva o modelo no Drive SE o val melhorar (seleção por val, test = honesto)
-#
-#  Pré-requisito: o modelo base do Roboflow precisa estar no Drive
-#  (soja_yolo11s_best.pt OU soja_yolo11s_finetuned.pt), gerado pelo train_yolo.ipynb.
-# =============================================================================
+# Vigil.ia - Treino DEFINITIVO (gerado a partir do notebook).
+# Versao .py do treino_definitivo_vigil.ipynb. Cole no Colab (GPU).
 
-# ----------------------------------------------------------------------------
-# 1) SETUP
-# ----------------------------------------------------------------------------
+# 1) SETUP — instala deps, monta o Drive, define config e helpers
 !pip -q install ultralytics
 
 import os, shutil, random, glob, pathlib, json, unicodedata
@@ -85,13 +66,12 @@ def crop_single_grain(arr):
     x, y, bw, bh = cv2.boundingRect(largest)
     pad = max(15, int(min(bw, bh) * 0.12))
     return arr[max(0, y-pad):min(h, y+bh+pad), max(0, x-pad):min(w, x+bw+pad)]
+print('✅ setup ok')
 
-# ----------------------------------------------------------------------------
 # 2) MODELO BASE (Roboflow) — do Drive
-# ----------------------------------------------------------------------------
 BASE_CANDS = [f'{SAVE_DIR}/soja_yolo11s_best.pt', f'{SAVE_DIR}/soja_yolo11s_finetuned.pt']
 BASE_PT = next((p for p in BASE_CANDS if os.path.exists(p)), None)
-assert BASE_PT, (f'❌ NÃO achei o modelo base no Drive. Esperado um destes:\n   ' +
+assert BASE_PT, ('❌ NÃO achei o modelo base no Drive. Esperado um destes:\n   ' +
                  '\n   '.join(BASE_CANDS) +
                  '\n   Gere com o train_yolo.ipynb (Célula 8).')
 model = YOLO(BASE_PT)
@@ -99,9 +79,7 @@ assert [model.names[i] for i in range(len(CLASS_NAMES))] == CLASS_NAMES, \
     'Ordem das classes do modelo diverge de CLASS_NAMES!'
 print('✅ Modelo base:', BASE_PT)
 
-# ----------------------------------------------------------------------------
 # 3) DATASET — junta as raízes, casa nomes PT/EN, recorta, split 70/15/15
-# ----------------------------------------------------------------------------
 REAL_DST = '/content/soja_real'
 if os.path.exists(REAL_DST):
     shutil.rmtree(REAL_DST)
@@ -168,13 +146,26 @@ print(f'  {"TOTAL":>13}: {tuple(total)}   [{sum(total)} fotos]')
 for k, v in summary.items():
     if sum(v) == 0:
         print(f'⚠️  classe "{k}" ZERADA — confira o nome da pasta/alias.')
-trains = [v[0] for v in summary.values()]
-if min(trains) and max(trains) > 2 * min(trains):
-    print('⚠️  desbalanceado no train (maior > 2x menor) — nivele a captura.')
 
-# ----------------------------------------------------------------------------
-# 4) BASELINE (antes do fine-tuning)
-# ----------------------------------------------------------------------------
+# --- BALANCEIA o TRAIN por oversampling (replicação) até a maior classe ---
+# Sem isso o modelo vicia na classe majoritária (intact tinha ~2x as outras e
+# recall 1.00, enquanto immature ficava em f1 0.60). As réplicas viram exemplos
+# diferentes graças ao mixup + augmentation forte. Só o TRAIN é balanceado
+# (val/test continuam intactos = avaliação honesta).
+BALANCE_TRAIN = True
+if BALANCE_TRAIN:
+    def _tcount():
+        return {c: len(glob.glob(os.path.join(REAL_DST, 'train', c, '*.jpg'))) for c in CLASS_NAMES}
+    target = max(_tcount().values())
+    for c in CLASS_NAMES:
+        files = sorted(glob.glob(os.path.join(REAL_DST, 'train', c, '*.jpg')))
+        i = 0
+        while files and len(glob.glob(os.path.join(REAL_DST, 'train', c, '*.jpg'))) < target:
+            src = files[i % len(files)]
+            shutil.copy(src, src[:-4] + f'_dup{i}.jpg'); i += 1
+    print('train balanceado (oversampling) ->', {SHORT[c]: v for c, v in _tcount().items()})
+
+# 4) BASELINE — modelo base (antes do fine-tuning) no domínio real
 def eval_split(m, split):
     paths, true = [], []
     for cls in CLASS_NAMES:
@@ -191,45 +182,46 @@ def eval_split(m, split):
 base_tr,  _, _ = eval_split(model, 'train')
 base_val, _, _ = eval_split(model, 'val')
 base_test, _, _ = eval_split(model, 'test')
-print(f'\nBASELINE (sem fine-tuning): train {base_tr:.1%} | val {base_val:.1%} | '
-      f'test {base_test:.1%}' if base_test is not None else f'\nBASELINE: train {base_tr:.1%} | val {base_val:.1%}')
+if base_test is not None:
+    print(f'BASELINE: train {base_tr:.1%} | val {base_val:.1%} | test {base_test:.1%}')
+else:
+    print(f'BASELINE: train {base_tr:.1%} | val {base_val:.1%}')
 
-# ----------------------------------------------------------------------------
-# 5) TREINO DEFINITIVO
-#    GPU forte: mais épocas + early-stopping (patience) + EMA + aug forte.
-#    FREEZE: 9 = último bloco + cabeça (recomendado). Com dataset bem nivelado
-#    e >=80/classe, dá pra testar 8 (mais capacidade). 10 = só a cabeça.
-# ----------------------------------------------------------------------------
+# 5) TREINO DEFINITIVO (v2 — corrige o que segurou o v1)
+#  Mudanças vs v1 (test 83.9%, gap 15.6%):
+#   • optimizer='AdamW' EXPLÍCITO  -> respeita o lr0 (o 'auto' ignorava o nosso)
+#   • dropout 0.1->0.25 + weight_decay maior + mixup  -> fecha o gap (overfitting)
+#   • classes balanceadas no train (célula 3)         -> tira o viés pró-intact
+#  FREEZE: 9 = último bloco + cabeça. Se ainda overfittar, teste 10 (só a cabeça).
 FREEZE = 9
 ft = YOLO(BASE_PT)
 ft.train(
     data=REAL_DST,
-    epochs=120,          # teto alto; o early-stopping corta no melhor
-    patience=30,         # para se o val não melhorar por 30 épocas
-    imgsz=224,           # igual à inferência de produção
-    batch=32,            # bom p/ ~500 fotos; suba p/ 64 se tiver MUITA foto
+    epochs=120, patience=30,
+    imgsz=224,             # = inferência de produção (224). Só suba p/ 256 se também
+                           # mudar o imgsz no backend (inference.py), senão desalinha.
+    batch=32,
     freeze=FREEZE,
-    lr0=0.0008, lrf=0.01, cos_lr=True,
-    dropout=0.1,         # regulariza a cabeça de classificação
-    seed=42,
-    cache=True,          # cacheia em RAM (GPU forte) -> épocas rápidas
-    # --- augmentation forte: a alavanca contra o domain shift (fundo/luz) ---
+    optimizer='AdamW',     # explícito -> o lr0 abaixo passa a valer
+    lr0=0.001, lrf=0.01, cos_lr=True, weight_decay=0.0008,
+    dropout=0.25,          # +regularização (o gap train-val estava em 15.6%)
+    mixup=0.15,            # mistura imagens: forte contra overfitting com poucas fotos
+    seed=42, cache=False,
+    # --- augmentation forte (domain shift: fundo cinza / iluminação) ---
     hsv_h=0.02, hsv_s=0.7, hsv_v=0.6,
     degrees=15, flipud=0.5, fliplr=0.5,
     translate=0.1, scale=0.5, erasing=0.4,
-    project='/content/runs_soja', name='yolo11s_definitivo',
+    project='/content/runs_soja', name='yolo11s_definitivo_v2',
     exist_ok=True, plots=True, verbose=True,
 )
 print('\nTreino concluído. save_dir:', ft.trainer.save_dir)
 
-# ----------------------------------------------------------------------------
 # 6) AVALIAÇÃO — antes x depois (val + test) + matriz de confusão (no test)
-# ----------------------------------------------------------------------------
 new_tr,  _, _                 = eval_split(ft, 'train')
 new_val, val_true, val_pred   = eval_split(ft, 'val')
 new_test, test_true, test_pred = eval_split(ft, 'test')
 
-print('\n=== Domínio real: ANTES -> DEPOIS ===')
+print('=== Domínio real: ANTES -> DEPOIS ===')
 print(f'  train: {base_tr:.1%} -> {new_tr:.1%}')
 print(f'  val:   {base_val:.1%} -> {new_val:.1%}   (seleção/gate)')
 if new_test is not None:
@@ -252,9 +244,7 @@ plt.xticks(rotation=45, ha='right'); plt.yticks(rotation=0); plt.tight_layout()
 plt.savefig(f'{SAVE_DIR}/vigil_matriz_confusao.png', dpi=130, bbox_inches='tight')
 plt.show()
 
-# ----------------------------------------------------------------------------
 # 7) SALVAR no Drive — só se o val melhorou (gate); versionado
-# ----------------------------------------------------------------------------
 from pathlib import Path
 best_ft = Path(ft.trainer.best)
 if new_val is not None and new_val > (base_val or 0):
@@ -265,11 +255,11 @@ if new_val is not None and new_val > (base_val or 0):
                'finetuned': {'train': new_tr, 'val': new_val, 'test': new_test},
                'counts': summary, 'freeze': FREEZE}
     json.dump(metrics, open(f'{SAVE_DIR}/vigil_metrics.json', 'w'), indent=2, default=float)
-    print(f'\n✅ val melhorou ({base_val:.1%} -> {new_val:.1%}) — salvo em:')
+    print(f'✅ val melhorou ({base_val:.1%} -> {new_val:.1%}) — salvo em:')
     print(f'   {dest}\n   {dest_v1}\n   + vigil_metrics.json + vigil_matriz_confusao.png')
     if new_test is not None:
         print(f'   test honesto: {base_test:.1%} -> {new_test:.1%}')
     print('\nPróximo: subir o .pt na raiz do HF Space soja-inspection-api (rebuild).')
 else:
-    print(f'\n❌ val NÃO melhorou ({base_val:.1%} -> {new_val:.1%}) — não salvei.')
+    print(f'❌ val NÃO melhorou ({base_val:.1%} -> {new_val:.1%}) — não salvei.')
     print('   Tente freeze=8, mais fotos na classe fraca, ou confirme o recorte.')
