@@ -64,8 +64,6 @@ export default function ResultadoPage() {
     return <p className="animate-pulse text-neutral-400">Carregando resultados…</p>;
 
   const uniqueClasses = Object.keys(data.class_counts);
-  const defectClasses = uniqueClasses.filter((c) => c !== "intact");
-  const hasDefects = defectClasses.length > 0;
 
   // classe dominante (p/ o card de veredito) + confiança média dela
   const dominant = uniqueClasses
@@ -76,6 +74,37 @@ export default function ResultadoPage() {
     ? domDets.reduce((s, d) => s + d.confidence, 0) / domDets.length
     : 0;
   const single = data.total_graos === 1;
+
+  // ---- FOCO DO NEGÓCIO: premium (intacto). Corte de confiança 80%. ----
+  const PREMIUM_CONF = 0.8; // grão só é Premium se intacto E confiança >= 80%
+  const LOTE_TARGET = 0.9; // lote aprovado se >= 90% premium
+  const premiumCount = data.detections.filter(
+    (d) => d.class === "intact" && d.confidence >= PREMIUM_CONF
+  ).length;
+  const premiumPct = data.total_graos ? premiumCount / data.total_graos : 0;
+  const grainStatus: "premium" | "review" | "defect" =
+    dominant === "intact" ? (domConf >= PREMIUM_CONF ? "premium" : "review") : "defect";
+  const loteVerdict = single
+    ? grainStatus === "premium"
+      ? { txt: "APROVADO", sub: "grão premium — intacto", color: "#22c55e" }
+      : grainStatus === "review"
+      ? { txt: "REVISAR", sub: "intacto, mas confiança < 80%", color: "#f59e0b" }
+      : {
+          txt: "REPROVADO",
+          sub: `fora do padrão — ${CLASS_LABELS[dominant] ?? dominant}`,
+          color: CLASS_COLORS[dominant] ?? "#ef4444",
+        }
+    : premiumPct >= LOTE_TARGET
+    ? {
+        txt: "APROVADO",
+        sub: `${(premiumPct * 100).toFixed(0)}% premium · meta ≥ ${LOTE_TARGET * 100}%`,
+        color: "#22c55e",
+      }
+    : {
+        txt: "REPROVADO",
+        sub: `${(premiumPct * 100).toFixed(0)}% premium · meta ≥ ${LOTE_TARGET * 100}%`,
+        color: "#ef4444",
+      };
 
   return (
     <div className="space-y-7">
@@ -133,7 +162,7 @@ export default function ResultadoPage() {
           confidence={domConf}
           totalGraos={data.total_graos}
           single={single}
-          defect={dominant !== "intact"}
+          status={grainStatus}
         />
       )}
 
@@ -168,22 +197,32 @@ export default function ResultadoPage() {
           </h3>
           <DefectTable classCounts={data.class_counts} totalGraos={data.total_graos} />
 
-          {modo === "industrial" && hasDefects && (
-            <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3">
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-amber-300">
-                Resumo industrial
+          {modo === "industrial" && (
+            <div
+              className="mt-4 rounded-xl border p-4"
+              style={{
+                borderColor: `${loteVerdict.color}40`,
+                background: `${loteVerdict.color}12`,
+              }}
+            >
+              <p
+                className="text-[11px] font-medium uppercase tracking-wider"
+                style={{ color: loteVerdict.color }}
+              >
+                Controle de qualidade · Premium
               </p>
-              <p className="text-sm text-amber-100/90">
-                {defectClasses.length === 1
-                  ? `Defeito predominante: ${CLASS_LABELS[defectClasses[0]] ?? defectClasses[0]}.`
-                  : `${defectClasses.length} tipos de defeito detectados.`}{" "}
-                {(
-                  (defectClasses.reduce((s, c) => s + (data.class_counts[c] ?? 0), 0) /
-                    data.total_graos) *
-                  100
-                ).toFixed(1)}
-                % do lote apresenta algum defeito.
+              <p
+                className="mt-1 text-2xl font-semibold tracking-tight"
+                style={{ color: loteVerdict.color }}
+              >
+                {loteVerdict.txt}
               </p>
+              <p className="mt-1 text-sm text-neutral-300">{loteVerdict.sub}</p>
+              {!single && (
+                <p className="mt-2 text-xs text-neutral-500">
+                  {premiumCount} de {data.total_graos} grãos premium (intactos, confiança ≥ 80%)
+                </p>
+              )}
             </div>
           )}
 
