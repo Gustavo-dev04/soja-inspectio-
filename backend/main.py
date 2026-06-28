@@ -1,4 +1,5 @@
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -77,11 +78,15 @@ def inspect(body: InspectRequest):
         "total_graos": result["total_graos"],
         "resultado_json": result,
     }
+    # A gravação é secundária: se o banco estiver fora (ex.: projeto Supabase
+    # pausado), NÃO derruba a inspeção — gera um id e segue. O front usa o
+    # sessionStorage pra abrir o resultado, então o fluxo continua normal.
     try:
         resp = supabase.table("inspecoes").insert(payload).execute()
         record_id = resp.data[0]["id"]
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Erro no banco de dados: {exc}")
+        print(f"[warn] falha ao gravar no banco (seguindo sem persistir): {exc}", flush=True)
+        record_id = str(uuid.uuid4())
 
     return InspectResponse(id=record_id, **result)
 
