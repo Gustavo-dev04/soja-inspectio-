@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { warmupOnnx, classifyCanvas } from "@/lib/onnx";
+import { grainRect } from "@/lib/segment";
 import { CLASS_LABELS, CLASS_COLORS } from "@/components/DefectTable";
 
 const PREMIUM_CONF = 0.8; // grão só é Premium se intacto E confiança >= 80%
@@ -18,42 +19,63 @@ const STATUS_TXT: Record<Status, string> = {
 
 export default function AoVivoPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const cropRef = useRef<HTMLCanvasElement>(null); // 224x224 (center-crop)
+  const cropRef = useRef<HTMLCanvasElement>(null); // 224x224 (entrada do modelo)
+  const workRef = useRef<HTMLCanvasElement>(null); // canvas auxiliar p/ segmentação
+  const detectedRef = useRef(false); // achou o grão (Otsu) neste quadro?
   const runningRef = useRef(false);
   const startingRef = useRef(false); // start() em andamento (entre clique e loop)
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
   const rafRef = useRef<number>();
 
+  const [detected, setDetected] = useState(false);
+
   const [phase, setPhase] = useState<Phase>("idle");
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ms, setMs] = useState(0);
 
-  const drawCenter224 = useCallback((): boolean => {
+  // Recorta o GRÃO (Otsu, igual ao treino) e desenha o quadrado central dele em
+  // 224x224. Sem grão claro, cai no center-crop do quadro inteiro (fallback).
+  const drawGrain224 = useCallback((): boolean => {
     const v = videoRef.current;
     const c = cropRef.current;
-    if (!v || !c || !v.videoWidth) return false;
-    const side = Math.min(v.videoWidth, v.videoHeight);
-    const sx = (v.videoWidth - side) / 2;
-    const sy = (v.videoHeight - side) / 2;
-    // willReadFrequently no PRIMEIRO getContext do canvas (o classifyCanvas faz
-    // getImageData todo frame) — evita readback GPU->CPU por quadro.
+    const work = workRef.current;
+    if (!v || !c || !work || !v.videoWidth) return false;
+    const vw = v.videoWidth;
+    const vh = v.videoHeight;
+    const rect = grainRect(v, vw, vh, work);
+    detectedRef.current = !!rect;
+    let side: number;
+    let sx: number;
+    let sy: number;
+    if (rect) {
+      // quadrado central do recorte do grão (= resize+centercrop do treino)
+      side = Math.min(rect.sw, rect.sh);
+      sx = rect.sx + (rect.sw - side) / 2;
+      sy = rect.sy + (rect.sh - side) / 2;
+    } else {
+      side = Math.min(vw, vh);
+      sx = (vw - side) / 2;
+      sy = (vh - side) / 2;
+    }
+    // willReadFrequently no PRIMEIRO getContext (classifyCanvas faz getImageData/frame)
     const ctx = c.getContext("2d", { willReadFrequently: true });
     if (!ctx) return false;
-    ctx.drawImage(v, sx, sy, side, side, 0, 0, 224, 224); // center-crop + resize
+    ctx.drawImage(v, sx, sy, side, side, 0, 0, 224, 224);
     return true;
   }, []);
 
   const tick = useCallback(async () => {
     if (!runningRef.current) return;
-    if (!inFlightRef.current && cropRef.current && drawCenter224()) {
+    if (!inFlightRef.current && cropRef.current && drawGrain224()) {
       inFlightRef.current = true;
       const t0 = performance.now();
       try {
         const { cls, conf } = await classifyCanvas(cropRef.current);
         if (!runningRef.current || !mountedRef.current) return; // parou durante a inferência
         setMs(Math.round(performance.now() - t0));
+        setDetected(detectedRef.current);
         const isIntact = cls === "intact";
         const status: Status = isIntact
           ? conf >= PREMIUM_CONF
@@ -79,7 +101,7 @@ export default function AoVivoPage() {
       }
     }
     if (runningRef.current) rafRef.current = requestAnimationFrame(tick);
-  }, [drawCenter224]);
+  }, [drawGrain224]);
 
   const start = useCallback(async () => {
     if (runningRef.current || startingRef.current) return; // evita duplo-clique
@@ -169,6 +191,7 @@ export default function AoVivoPage() {
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black">
         <video ref={videoRef} playsInline muted className="aspect-[4/3] w-full object-cover" />
         <canvas ref={cropRef} width={224} height={224} className="hidden" />
+        <canvas ref={workRef} className="hidden" />
 
         {phase === "idle" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/40 text-center">
@@ -214,22 +237,39 @@ export default function AoVivoPage() {
                 {verdict.label} · {(verdict.conf * 100).toFixed(0)}% de confiança
               </p>
             </div>
-            <span className="rounded-full border border-white/15 bg-black/40 px-2.5 py-1 font-mono text-[10px] text-neutral-300">
-              {ms} ms · ~{ms ? Math.round(1000 / ms) : 0} fps
-            </span>
+            <div className="flex flex-col items-end gap-1">
+              <span
+                className="rounded-full border px-2.5 py-1 font-mono text-[10px]"
+                style={{
+                  color: detected ? "#34d399" : "#a3a3a3",
+                  borderColor: detected ? "#34d39955" : "#ffffff26",
+                  background: "rgba(0,0,0,0.4)",
+                }}
+              >
+                {detected ? "● grão recortado" : "○ procurando grão…"}
+              </span>
+              <span className="rounded-full border border-white/15 bg-black/40 px-2.5 py-1 font-mono text-[10px] text-neutral-300">
+                {ms} ms · ~{ms ? Math.round(1000 / ms) : 0} fps
+              </span>
+            </div>
           </div>
         )}
 
         {running && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="h-40 w-40 rounded-2xl border-2 border-white/30" />
+            <div
+              className="h-40 w-40 rounded-2xl border-2 transition-colors"
+              style={{ borderColor: detected ? "#34d399b3" : "#ffffff4d" }}
+            />
           </div>
         )}
       </div>
 
       <div className="flex items-center justify-between">
-        <p className="text-xs text-neutral-600">
-          Inferência local (onnxruntime-web). Encha a mira com 1 grão, fundo escuro e luz de cima.
+        <p className="max-w-md text-xs text-neutral-600">
+          Inferência local (onnxruntime-web), com recorte do grão por Otsu — funciona
+          melhor com <b className="text-neutral-400">fundo escuro e luz de cima</b> (a mira
+          fica verde quando acha o grão). Vídeo ainda é experimental.
         </p>
         {running && (
           <button
