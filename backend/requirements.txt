@@ -1,11 +1,10 @@
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-# torch fixado <2.6: evita o weights_only=True do torch>=2.6 na carga do .pt.
-torch==2.2.2
-torchvision==0.17.2
-# ultralytics>=8.3.0: o modelo eh um YOLO11 (bloco C3k2), que so existe a
-# partir do 8.3.0 — o 8.2.0 quebrava com "Can't get attribute 'C3k2'".
-ultralytics==8.3.0
+# ultralytics 8.4.80 = MESMA versão que treinou/salvou o .pt. No 8.3.0 o modelo
+# carregava mas o predict dava 500 (incompatibilidade de versão). torch fica sem
+# pin: o ultralytics 8.4.80 puxa uma versão compatível e já allowlista os globals
+# do checkpoint (o weights_only do torch>=2.6 não quebra mais).
+ultralytics==8.4.80
 supabase==2.4.2
 huggingface_hub==0.23.4
 python-multipart==0.0.9
