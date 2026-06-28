@@ -20,6 +20,8 @@ export default function AoVivoPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cropRef = useRef<HTMLCanvasElement>(null); // 224x224 (center-crop)
   const runningRef = useRef(false);
+  const startingRef = useRef(false); // start() em andamento (entre clique e loop)
+  const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
   const rafRef = useRef<number>();
 
@@ -35,7 +37,9 @@ export default function AoVivoPage() {
     const side = Math.min(v.videoWidth, v.videoHeight);
     const sx = (v.videoWidth - side) / 2;
     const sy = (v.videoHeight - side) / 2;
-    const ctx = c.getContext("2d");
+    // willReadFrequently no PRIMEIRO getContext do canvas (o classifyCanvas faz
+    // getImageData todo frame) — evita readback GPU->CPU por quadro.
+    const ctx = c.getContext("2d", { willReadFrequently: true });
     if (!ctx) return false;
     ctx.drawImage(v, sx, sy, side, side, 0, 0, 224, 224); // center-crop + resize
     return true;
@@ -48,6 +52,7 @@ export default function AoVivoPage() {
       const t0 = performance.now();
       try {
         const { cls, conf } = await classifyCanvas(cropRef.current);
+        if (!runningRef.current || !mountedRef.current) return; // parou durante a inferência
         setMs(Math.round(performance.now() - t0));
         const isIntact = cls === "intact";
         const status: Status = isIntact
@@ -73,25 +78,41 @@ export default function AoVivoPage() {
         inFlightRef.current = false;
       }
     }
-    rafRef.current = requestAnimationFrame(tick);
+    if (runningRef.current) rafRef.current = requestAnimationFrame(tick);
   }, [drawCenter224]);
 
   const start = useCallback(async () => {
+    if (runningRef.current || startingRef.current) return; // evita duplo-clique
+    startingRef.current = true;
     setError(null);
     setPhase("loading");
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
         audio: false,
       });
+      if (!startingRef.current || !mountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop()); // cancelado durante o getUserMedia
+        return;
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
       await warmupOnnx(); // baixa/compila o modelo (≈21 MB na 1ª vez)
+      if (!startingRef.current || !mountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop()); // cancelado durante o warmup
+        if (videoRef.current) videoRef.current.srcObject = null;
+        return;
+      }
       runningRef.current = true;
+      startingRef.current = false;
       tick();
     } catch (e) {
+      startingRef.current = false;
+      stream?.getTracks().forEach((t) => t.stop());
+      if (!mountedRef.current) return;
       setPhase("error");
       setError(
         e instanceof Error && e.name === "NotAllowedError"
@@ -103,16 +124,25 @@ export default function AoVivoPage() {
 
   const stop = useCallback(() => {
     runningRef.current = false;
+    startingRef.current = false; // cancela um start() em andamento
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setPhase("idle");
-    setVerdict(null);
+    if (mountedRef.current) {
+      setPhase("idle");
+      setVerdict(null);
+    }
     const v = videoRef.current;
     const s = v?.srcObject as MediaStream | null;
     s?.getTracks().forEach((t) => t.stop());
     if (v) v.srcObject = null;
   }, []);
 
-  useEffect(() => () => stop(), [stop]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stop();
+    };
+  }, [stop]);
 
   const running = phase === "live" || phase === "loading";
 

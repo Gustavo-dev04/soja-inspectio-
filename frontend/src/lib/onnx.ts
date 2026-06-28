@@ -12,7 +12,9 @@ export const ONNX_CLASSES = [
 ] as const;
 
 const MODEL_URL = "/models/soja_yolo11s.onnx";
-const ORT_VERSION = "1.20.1";
+// Runtime wasm auto-hospedado em /public/ort/ (mesmo origin) — sem depender de CDN
+// e sem risco de drift entre o JS importado e o .wasm baixado.
+const WASM_PATH = "/ort/";
 
 type Session = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -27,9 +29,9 @@ async function getSession(): Promise<Session> {
   if (!sessionPromise) {
     sessionPromise = (async () => {
       const ort = await import("onnxruntime-web");
-      // single-thread (sem COOP/COEP) + wasm servido por CDN
+      // single-thread (sem COOP/COEP) + wasm servido pelo próprio site
       ort.env.wasm.numThreads = 1;
-      ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
+      ort.env.wasm.wasmPaths = WASM_PATH;
       const session = await ort.InferenceSession.create(MODEL_URL, {
         executionProviders: ["wasm"],
         graphOptimizationLevel: "all",
