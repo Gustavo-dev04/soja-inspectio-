@@ -1,5 +1,23 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// Backend dinâmico p/ demo: abrir o site com ?api=https://xxxx.trycloudflare.com
+// troca o servidor de visão sem redeploy (ex.: RT-DETR na GPU do Colab).
+// ?api=off volta pro backend padrão. Persistido em localStorage.
+function apiBase(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const q = new URLSearchParams(window.location.search).get("api");
+      if (q === "off") localStorage.removeItem("vigil_api_url");
+      else if (q) localStorage.setItem("vigil_api_url", q.replace(/\/+$/, ""));
+      const saved = localStorage.getItem("vigil_api_url");
+      if (saved) return saved;
+    } catch {
+      /* storage indisponível — segue no padrão */
+    }
+  }
+  return API_URL;
+}
+
 export interface Detection {
   class: string;
   class_id: number;
@@ -29,12 +47,13 @@ export async function inspectImage(
   // componente). O backend remove o prefixo "data:...;base64," se houver.
   // persist=false → modo câmera ao vivo (não grava no banco).
   const { persist = true, timeoutMs = 90_000 } = opts;
+  const base = apiBase();
   let res: Response;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      res = await fetch(`${API_URL}/inspect`, {
+      res = await fetch(`${base}/inspect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: imageBase64, imagem_url: "", persist }),
@@ -49,7 +68,7 @@ export async function inspectImage(
         "O servidor de visão demorou demais para responder (pode estar acordando). Tente de novo em alguns segundos."
       );
     }
-    const host = hostOf(API_URL);
+    const host = hostOf(base);
     throw new Error(
       `Não consegui falar com o servidor de visão${host ? ` (${host})` : ""}. Verifique se ele está no ar.`
     );
