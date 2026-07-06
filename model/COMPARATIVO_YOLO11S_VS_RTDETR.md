@@ -155,3 +155,50 @@ lado a lado no mesmo material); os números exatos têm barra de erro.
    destilação é que o gap é de dado, não só de arquitetura; o v4 é o teste dela.
 3. Resultado negativo arquivado: LR discriminativo em dataset saturado não
    melhora (ft_v3_disc < ft_v3). Re-testável junto com dado novo, não sozinho.
+
+
+---
+
+## 10. ADENDO — Tira-teima da curva de capacidade (resultado que muda a decisão)
+
+Após a seção 8, rodamos o experimento decisivo (`tira_teima_capacidade.ipynb`):
+YOLO11l e YOLO11x treinados pelo **mesmo caminho de 2 estágios do RT-DETR**
+(COCO → base 12,5k com pseudo-rótulo Otsu → fine-tune v3) — corrigindo a
+assimetria do comparativo original, em que os YOLOs não viam as 12,5k imagens.
+Avaliação: mesmo vídeo, mesmo pipeline (NMS + veredito travado), estimativa
+visual de acurácia premium pelo dono.
+
+| Modelo | Params | GFLOPs | Veredito no vídeo *(visual)* |
+|---|---|---|---|
+| YOLO11s (sem estágio base) | 9,4 M | 21,5 | ainda atrás (~65–75%) |
+| YOLO11l | 25,3 M | 86,9 | ≈ RT-DETR; alucina mais, porém **melhor no spotted** |
+| RT-DETR-l | 32,0 M | 103,5 | ~80–85% (campeão anterior) |
+| **YOLO11x** | **56,9 M** | **194,9** | **~95% — novo campeão** |
+
+### Conclusões
+
+1. **O gap era capacidade + caminho de dados, não arquitetura.** Em capacidade
+   pareada (11l vs RT-DETR-l), empate com perfis de erro distintos; com ~2× a
+   capacidade, a CNN (com atenção C2PSA) supera o transformer.
+2. A tese da seção 7 ("transformer generaliza melhor com dado escasso") fica
+   **restrita ao regime de capacidade igual/menor** — e parte da vantagem
+   original do RT-DETR sobre o 11s era o estágio base que o 11s não teve.
+3. Bônus de engenharia do 11x: NMS nativo (`agnostic_nms=True`, sem patch),
+   treino estável (sem o colapso de warmup nem o risco de NaN com AMP do
+   RT-DETR), pipeline mais simples.
+4. Ressalva honesta de sempre: ~95% é estimativa visual no vídeo de teste, não
+   benchmark rotulado; a validação por composição (vídeos mistos com contagem
+   conhecida) vai dar o número com fonte.
+
+### Papéis atualizados
+
+| Papel | Modelo | Status |
+|---|---|---|
+| Modo foto (produção) | YOLO11s-cls | no ar — intocado |
+| **Vídeo / demo (GPU)** | **YOLO11x_v3** (`soja_yolo11x_v3.pt`) | novo campeão; demo via Colab atualizada |
+| Reserva / segunda opinião | RT-DETR-l ft_v3 | arquivado no Drive; útil como comparador |
+| Local / edge (futuro) | YOLO11s ou 11m via destilação | professor da destilação agora é o **11x** |
+
+O auto-treino v4 (vídeos por classe) passa a usar o **YOLO11x como professor**
+das caixas (classe continua vindo da pasta) — adaptação junto com a leitura da
+pasta de vídeos.
