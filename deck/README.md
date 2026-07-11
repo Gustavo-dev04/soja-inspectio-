@@ -52,7 +52,7 @@ python vigil_deck.py                     # câmera padrão (0)
 ```
 
 Janela abre com a câmera; cada grão ganha caixa + rótulo; o HUD conta intactos/defeitos.
-Teclas: **q** sai · **espaço** zera a contagem · **p** pausa.
+Teclas: **q** sai (salva) · **espaço** salva agora (só com `--save-dir`) · **c** zera a contagem · **p** pausa.
 
 Ajustes úteis:
 
@@ -114,6 +114,10 @@ python vigil_deck.py --save-dir capturas --camera http://192.168.0.15:4747/video
 Cria `capturas/sessao_AAAAMMDD_HHMMSS/` com:
 - `graos/0001_intact.jpg`, `graos/0002_broken.jpg`, … — um recorte por grão
 - `revisao.csv` — colunas `id, classe_prevista, confianca, n_frames, classe_corrigida`
+
+Aperte **espaço** a qualquer momento pra gravar o que já foi coletado (o terminal
+mostra `💾 N grão(s) salvo(s)`); ao sair com **q** ele também grava. Sem `--save-dir`,
+o espaço só avisa que não há onde salvar. **c** zera a contagem (não confundir com salvar).
 
 Mesmo formato do `model/aprendizado_ativo.ipynb` (Fase 2): abra o CSV, preencha
 `classe_corrigida` só onde o modelo errou (vazio = confirmado certo,

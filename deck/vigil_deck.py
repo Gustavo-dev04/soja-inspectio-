@@ -15,11 +15,12 @@ Câmera:
     abra o app no celular (mesma rede Wi-Fi do Deck) e passe a URL dele:
         python vigil_deck.py --camera http://192.168.0.15:4747/video
 
-Teclas na janela: q = sair | espaço = zera a contagem | p = pausa.
+Teclas na janela: q = sair (salva) | espaço = salva agora | c = zera | p = pausa.
 
 Captura p/ treino futuro (--save-dir PASTA): salva o recorte mais nítido de cada
 grão com veredito fechado + um revisao.csv (mesmo formato do
 model/aprendizado_ativo.ipynb) pra revisar e reaproveitar no re-treino.
+Espaço grava a qualquer momento; ao sair com q também grava.
 """
 import argparse
 import csv
@@ -70,6 +71,19 @@ def list_cameras(max_idx=10):
     else:
         print('use --camera <índice>. O de maior número costuma ser o celular USB.')
     return achou
+
+
+def salvar_sessao(session_dir, locked, best, seen):
+    """Grava recorte mais nítido de cada grão travado + revisao.csv. Retorna quantos."""
+    prontos = sorted(tid for tid in locked if tid in best)
+    for tid in prontos:
+        cv2.imwrite(f'{session_dir}/graos/{tid:04d}_{locked[tid]}.jpg', best[tid][1])
+    with open(f'{session_dir}/revisao.csv', 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['id', 'classe_prevista', 'confianca', 'n_frames', 'classe_corrigida'])
+        for tid in prontos:
+            w.writerow([tid, locked[tid], round(best[tid][2], 3), seen[tid], ''])
+    return len(prontos)
 
 
 def rotate(frame, deg):
@@ -153,7 +167,7 @@ def main():
     best = {}                      # tid -> (nitidez, crop_bgr, conf) — só usado com --save-dir
     t_prev, fps, paused = time.time(), 0.0, False
 
-    win = 'Vigil.ia — Steam Deck (q sai)'
+    win = 'Vigil.ia (q sai | espaco salva | c zera | p pausa)'
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     try:
         while True:
@@ -217,23 +231,23 @@ def main():
             if k == ord('q'):
                 break
             if k == ord(' '):
+                if session_dir:
+                    n = salvar_sessao(session_dir, locked, best, seen)
+                    print(f'💾 {n} grão(s) salvo(s) em {session_dir}/graos/')
+                else:
+                    print('nada salvo: rode com --save-dir PASTA (ex.: --save-dir capturas)')
+            if k == ord('c'):
                 votes.clear(); seen.clear(); first_seen.clear()
                 locked.clear(); smooth.clear(); best.clear()
+                print('contagem zerada.')
             if k == ord('p'):
                 paused = not paused
     finally:
         cap.release()
         cv2.destroyAllWindows()
         if session_dir:
-            prontos = sorted(tid for tid in locked if tid in best)
-            for tid in prontos:
-                cv2.imwrite(f'{session_dir}/graos/{tid:04d}_{locked[tid]}.jpg', best[tid][1])
-            with open(f'{session_dir}/revisao.csv', 'w', newline='') as f:
-                w = csv.writer(f)
-                w.writerow(['id', 'classe_prevista', 'confianca', 'n_frames', 'classe_corrigida'])
-                for tid in prontos:
-                    w.writerow([tid, locked[tid], round(best[tid][2], 3), seen[tid], ''])
-            print(f'{len(prontos)} grãos salvos em {session_dir}/graos/ | revise em '
+            n = salvar_sessao(session_dir, locked, best, seen)
+            print(f'{n} grãos salvos em {session_dir}/graos/ | revise em '
                   f'{session_dir}/revisao.csv (mesmo fluxo do model/aprendizado_ativo.ipynb)')
 
 
