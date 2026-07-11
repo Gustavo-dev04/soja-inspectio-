@@ -7,10 +7,13 @@ classe (mata a alucinação de defeito nos grãos bons).
 
 Câmera:
   - Por padrão usa o dispositivo 0.
-  - Depois, com o CELULAR via USB (modo webcam UVC do Android 14+, ou DroidCam
-    em modo USB), ele aparece como outro /dev/videoN — rode:
+  - CELULAR via USB (modo webcam UVC do Android 14+): aparece como outro
+    /dev/videoN — rode:
         python vigil_deck.py --list-cameras     (descobre o índice)
         python vigil_deck.py --camera 2          (usa o celular)
+  - CELULAR sem modo webcam USB (ex. XOS/Infinix): use o DroidCam por Wi-Fi —
+    abra o app no celular (mesma rede Wi-Fi do Deck) e passe a URL dele:
+        python vigil_deck.py --camera http://192.168.0.15:4747/video
 
 Teclas na janela: q = sair | espaço = zera a contagem | p = pausa.
 """
@@ -91,7 +94,9 @@ def main():
     ap = argparse.ArgumentParser(description='Vígil.ia ao vivo no Steam Deck (local).')
     ap.add_argument('--model', default='soja_yolo11n_base12k_v2.pt',
                     help='caminho do .pt (padrão: ao lado do script)')
-    ap.add_argument('--camera', type=int, default=0, help='índice da câmera (0 = padrão)')
+    ap.add_argument('--camera', default='0',
+                    help='índice da câmera (0 = padrão) OU URL de stream, ex. '
+                         'http://192.168.0.15:4747/video (DroidCam por Wi-Fi)')
     ap.add_argument('--imgsz', type=int, default=640, help='resolução (480 = mais fps)')
     ap.add_argument('--conf', type=float, default=0.35, help='confiança mínima da detecção')
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270],
@@ -106,11 +111,13 @@ def main():
     print(f'carregando {args.model} …')
     model = YOLO(args.model)
 
-    cap = cv2.VideoCapture(args.camera)
+    src = int(args.camera) if args.camera.isdigit() else args.camera
+    cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         raise SystemExit(
             f'não abri a câmera {args.camera}. Rode --list-cameras pra ver as disponíveis '
-            '(no celular, ative o modo webcam USB).')
+            '(no celular: modo webcam USB, ou DroidCam por Wi-Fi com '
+            '--camera http://IP_DO_CELULAR:4747/video).')
     print(f'câmera {args.camera} aberta | q para sair')
 
     votes = defaultdict(Counter)   # tid -> votos ponderados por confiança

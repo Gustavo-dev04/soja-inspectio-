@@ -62,10 +62,16 @@ python vigil_deck.py --conf 0.4          # menos detecção fraca
 python vigil_deck.py --model /caminho/outro.pt
 ```
 
-## 4. Câmera do celular via USB (depois)
+## 4. Câmera do celular
 
-1. **Android 14+**: Configurações → conectar USB → escolher **"Webcam"** (modo UVC nativo).
-   Alternativa em qualquer Android: app **DroidCam** ou **Iriun** em **modo USB**.
+> O Steam Deck **não tem câmera embutida** — o celular (ou uma webcam USB) é a câmera.
+
+### 4a. Via USB (Android 14+ com modo Webcam)
+
+1. Plugue o cabo (tem que ser cabo de **dados**, não só carga) e, no celular,
+   toque na notificação USB → **Preferências USB** → escolha **"Webcam"** (modo UVC nativo).
+   Nem todo Android 14 tem essa opção — fabricantes de entrada (ex. XOS/Infinix)
+   às vezes não incluem; nesse caso use a via Wi-Fi (4b).
 2. No Deck, com o cabo conectado:
    ```bash
    python vigil_deck.py --list-cameras    # mostra os índices disponíveis
@@ -73,7 +79,21 @@ python vigil_deck.py --model /caminho/outro.pt
    python vigil_deck.py --camera 2 --rotate 90   # se o celular estiver em pé
    ```
 
-A câmera do celular costuma ter lente melhor que a do Deck — bom pra qualidade de imagem.
+### 4b. Via Wi-Fi (qualquer Android — DroidCam)
+
+Não instala nada a mais no Deck: o celular transmite o vídeo pela rede e o
+script abre a URL direto.
+
+1. Instale o app **DroidCam** (Dev47Apps) no celular, pela Play Store.
+2. Celular e Deck na **mesma rede Wi-Fi**. Abra o app — ele mostra algo como
+   `WiFi IP: 192.168.0.15` e `Port: 4747`.
+3. No Deck:
+   ```bash
+   python vigil_deck.py --camera http://192.168.0.15:4747/video   # use o IP do SEU app
+   ```
+   Se a imagem vier deitada, acrescente `--rotate 90`.
+
+A câmera do celular costuma ter lente melhor que webcams baratas — bom pra qualidade de imagem.
 
 ---
 
