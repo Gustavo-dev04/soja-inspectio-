@@ -15,6 +15,7 @@ Câmera:
 Teclas na janela: q = sair | espaço = zera a contagem | p = pausa.
 """
 import argparse
+import os
 import time
 from collections import defaultdict, Counter
 
@@ -103,8 +104,21 @@ def main():
         list_cameras()
         return
 
-    print(f'carregando {args.model} …')
-    model = YOLO(args.model)
+    # acha o .pt: caminho dado -> pasta atual -> pasta do PRÓPRIO script
+    model_path = args.model
+    if not os.path.exists(model_path):
+        ao_lado = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               os.path.basename(model_path))
+        if os.path.exists(ao_lado):
+            model_path = ao_lado
+        else:
+            raise SystemExit(
+                f'modelo não encontrado: {args.model}\n'
+                f'  procurei também em: {ao_lado}\n'
+                '  deixe o .pt na mesma pasta do script, ou passe --model /caminho/completo.pt')
+
+    print(f'carregando {model_path} …')
+    model = YOLO(model_path)
 
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
