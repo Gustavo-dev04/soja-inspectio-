@@ -177,6 +177,9 @@ def main():
             if args.rotate:
                 frame = rotate(frame, args.rotate)
             now = time.time()
+            # cópia crua ANTES de desenhar — os recortes p/ treino saem daqui,
+            # sem caixa nem texto por cima (senão o modelo treina com lixo)
+            clean = frame.copy() if session_dir else None
 
             if not paused:
                 # detecta+rastreia no frame JÁ rotacionado -> caixas sempre batem
@@ -197,7 +200,7 @@ def main():
                                 locked[tid] = veredito(votes[tid])
                         if session_dir:
                             x1c, y1c, x2c, y2c = xyxy
-                            crop = frame[max(0, y1c):y2c, max(0, x1c):x2c]
+                            crop = clean[max(0, y1c):y2c, max(0, x1c):x2c]
                             if crop.size:
                                 nitidez = cv2.Laplacian(
                                     cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
