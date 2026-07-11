@@ -16,8 +16,14 @@ Câmera:
         python vigil_deck.py --camera http://192.168.0.15:4747/video
 
 Teclas na janela: q = sair | espaço = zera a contagem | p = pausa.
+
+Captura p/ treino futuro (--save-dir PASTA): salva o recorte mais nítido de cada
+grão com veredito fechado + um revisao.csv (mesmo formato do
+model/aprendizado_ativo.ipynb) pra revisar e reaproveitar no re-treino.
 """
 import argparse
+import csv
+import os
 import time
 from collections import defaultdict, Counter
 
@@ -74,12 +80,13 @@ def rotate(frame, deg):
     return frame
 
 
-def draw_hud(frame, locked, fps, paused):
+def draw_hud(frame, locked, fps, paused, capturando):
     dist = Counter(locked.values())
     n = sum(dist.values())
     intact = dist.get('intact', 0)
     linhas = [f'graos: {n}   intactos: {intact}   defeitos: {n - intact}',
-              f'{fps:.0f} fps' + ('   [PAUSA]' if paused else '')]
+              f'{fps:.0f} fps' + ('   [PAUSA]' if paused else '')
+              + ('   ● capturando p/ treino' if capturando else '')]
     for cls in ('broken', 'immature', 'skin-damaged', 'spotted'):
         if dist.get(cls):
             linhas.append(f'  {PT_LABEL[cls]}: {dist[cls]}')
@@ -105,6 +112,10 @@ def main():
     ap.add_argument('--device', default=None,
                     help='dispositivo de inferência: cpu, 0 (GPU CUDA) ou, com modelo '
                          'exportado p/ OpenVINO, "intel:gpu" / "intel:cpu" / "intel:npu"')
+    ap.add_argument('--save-dir', default=None,
+                    help='pasta onde salvar recortes+revisao.csv p/ treino futuro '
+                         '(cria uma subpasta por sessão; formato igual ao '
+                         'model/aprendizado_ativo.ipynb)')
     args = ap.parse_args()
 
     if args.list_cameras:
@@ -123,9 +134,16 @@ def main():
             '--camera http://IP_DO_CELULAR:4747/video).')
     print(f'câmera {args.camera} aberta | q para sair')
 
+    session_dir = None
+    if args.save_dir:
+        session_dir = os.path.join(args.save_dir, time.strftime('sessao_%Y%m%d_%H%M%S'))
+        os.makedirs(os.path.join(session_dir, 'graos'), exist_ok=True)
+        print(f'capturando p/ treino futuro em: {session_dir}')
+
     votes = defaultdict(Counter)   # tid -> votos ponderados por confiança
     seen = Counter()               # tid -> nº de frames
     locked = {}                    # tid -> classe travada (anti-flicker)
+    best = {}                      # tid -> (nitidez, crop_bgr, conf) — só usado com --save-dir
     t_prev, fps, paused = time.time(), 0.0, False
 
     win = 'Vigil.ia — Steam Deck (q sai)'
@@ -153,6 +171,14 @@ def main():
                             seen[tid] += 1
                             if seen[tid] >= LOCK_MIN_FRAMES:
                                 locked[tid] = veredito(votes[tid])
+                        if session_dir:
+                            x1c, y1c, x2c, y2c = xyxy
+                            crop = frame[max(0, y1c):y2c, max(0, x1c):x2c]
+                            if crop.size:
+                                nitidez = cv2.Laplacian(
+                                    cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+                                if tid not in best or nitidez > best[tid][0]:
+                                    best[tid] = (nitidez, crop.copy(), cf)
                         cls = locked.get(tid)
                         color = COLORS[cls] if cls else (160, 160, 160)
                         label = PT_LABEL[cls] if cls else 'analisando...'
@@ -164,19 +190,30 @@ def main():
             now = time.time()
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - t_prev, 1e-6))
             t_prev = now
-            draw_hud(frame, locked, fps, paused)
+            draw_hud(frame, locked, fps, paused, bool(session_dir))
             cv2.imshow(win, frame)
 
             k = cv2.waitKey(1) & 0xFF
             if k == ord('q'):
                 break
             if k == ord(' '):
-                votes.clear(); seen.clear(); locked.clear()
+                votes.clear(); seen.clear(); locked.clear(); best.clear()
             if k == ord('p'):
                 paused = not paused
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        if session_dir:
+            prontos = sorted(tid for tid in locked if tid in best)
+            for tid in prontos:
+                cv2.imwrite(f'{session_dir}/graos/{tid:04d}_{locked[tid]}.jpg', best[tid][1])
+            with open(f'{session_dir}/revisao.csv', 'w', newline='') as f:
+                w = csv.writer(f)
+                w.writerow(['id', 'classe_prevista', 'confianca', 'n_frames', 'classe_corrigida'])
+                for tid in prontos:
+                    w.writerow([tid, locked[tid], round(best[tid][2], 3), seen[tid], ''])
+            print(f'{len(prontos)} grãos salvos em {session_dir}/graos/ | revise em '
+                  f'{session_dir}/revisao.csv (mesmo fluxo do model/aprendizado_ativo.ipynb)')
 
 
 if __name__ == '__main__':

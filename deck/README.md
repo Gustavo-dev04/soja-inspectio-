@@ -95,6 +95,25 @@ script abre a URL direto.
 
 A câmera do celular costuma ter lente melhor que webcams baratas — bom pra qualidade de imagem.
 
+## 5. Capturar grãos p/ treino futuro
+
+O app pode salvar, de cada grão com veredito fechado, o recorte mais nítido visto
+durante o rastreio — pra depois revisar e reaproveitar num re-treino:
+
+```bash
+python vigil_deck.py --save-dir capturas --camera http://192.168.0.15:4747/video
+```
+
+Cria `capturas/sessao_AAAAMMDD_HHMMSS/` com:
+- `graos/0001_intact.jpg`, `graos/0002_broken.jpg`, … — um recorte por grão
+- `revisao.csv` — colunas `id, classe_prevista, confianca, n_frames, classe_corrigida`
+
+Mesmo formato do `model/aprendizado_ativo.ipynb` (Fase 2): abra o CSV, preencha
+`classe_corrigida` só onde o modelo errou (vazio = confirmado certo,
+`descartar` = não é grão), e os recortes + o CSV corrigido alimentam a Fase 3
+do notebook (propaga a correção e re-treina). Só grãos com veredito **travado**
+são salvos — os que ainda diziam "analisando..." ficam de fora.
+
 ---
 
 ## Notas
