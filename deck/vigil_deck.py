@@ -43,6 +43,8 @@ COLORS = {'intact': (90, 200, 90), 'immature': (60, 200, 200), 'broken': (170, 1
 #     (benefício da dúvida). Ajuste aqui se precisar. ---
 RATIOS = {'broken': 0.85, 'skin-damaged': 0.80, 'spotted': 0.75, 'immature': 0.75}
 LOCK_MIN_FRAMES = 8   # frames mínimos rastreando antes de travar a classe do grão
+MIN_DRAW_FRAMES = 3   # só desenha o grão depois disso (mata detecção piscante de 1-2 frames)
+SMOOTH = 0.4          # suavização da caixa (EMA): menor = mais estável, menos treme
 
 
 def veredito(cnt: Counter) -> str:
@@ -106,6 +108,9 @@ def main():
                          'http://192.168.0.15:4747/video (DroidCam por Wi-Fi)')
     ap.add_argument('--imgsz', type=int, default=640, help='resolução (480 = mais fps)')
     ap.add_argument('--conf', type=float, default=0.35, help='confiança mínima da detecção')
+    ap.add_argument('--hold', type=float, default=3.0,
+                    help='segundos observando cada grão antes de travar a classe '
+                         '(padrão 3; suba p/ 5 se travar cedo demais). Segure a câmera parada.')
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270],
                     help='girar a imagem (útil p/ celular em pé)')
     ap.add_argument('--list-cameras', action='store_true', help='lista as câmeras e sai')
@@ -142,7 +147,9 @@ def main():
 
     votes = defaultdict(Counter)   # tid -> votos ponderados por confiança
     seen = Counter()               # tid -> nº de frames
+    first_seen = {}                # tid -> timestamp do 1º frame (trava por tempo)
     locked = {}                    # tid -> classe travada (anti-flicker)
+    smooth = {}                    # tid -> caixa suavizada (x1,y1,x2,y2 float) p/ desenho
     best = {}                      # tid -> (nitidez, crop_bgr, conf) — só usado com --save-dir
     t_prev, fps, paused = time.time(), 0.0, False
 
@@ -155,6 +162,7 @@ def main():
                 print('câmera parou de enviar frames.'); break
             if args.rotate:
                 frame = rotate(frame, args.rotate)
+            now = time.time()
 
             if not paused:
                 # detecta+rastreia no frame JÁ rotacionado -> caixas sempre batem
@@ -167,9 +175,11 @@ def main():
                                                 r.boxes.cls.int().tolist(),
                                                 r.boxes.conf.tolist()):
                         if tid not in locked:
+                            first_seen.setdefault(tid, now)
                             votes[tid][NAMES[c]] += cf
                             seen[tid] += 1
-                            if seen[tid] >= LOCK_MIN_FRAMES:
+                            # trava só depois de frames E tempo suficientes observando
+                            if seen[tid] >= LOCK_MIN_FRAMES and now - first_seen[tid] >= args.hold:
                                 locked[tid] = veredito(votes[tid])
                         if session_dir:
                             x1c, y1c, x2c, y2c = xyxy
@@ -180,14 +190,24 @@ def main():
                                 if tid not in best or nitidez > best[tid][0]:
                                     best[tid] = (nitidez, crop.copy(), cf)
                         cls = locked.get(tid)
+                        # ignora detecção piscante (grão visto por poucos frames) até estabilizar
+                        if cls is None and seen[tid] < MIN_DRAW_FRAMES:
+                            continue
+                        # suaviza a caixa (EMA) pra não tremer frame a frame
+                        x1, y1, x2, y2 = xyxy
+                        if tid in smooth:
+                            px1, py1, px2, py2 = smooth[tid]
+                            x1 = int(SMOOTH * x1 + (1 - SMOOTH) * px1)
+                            y1 = int(SMOOTH * y1 + (1 - SMOOTH) * py1)
+                            x2 = int(SMOOTH * x2 + (1 - SMOOTH) * px2)
+                            y2 = int(SMOOTH * y2 + (1 - SMOOTH) * py2)
+                        smooth[tid] = (x1, y1, x2, y2)
                         color = COLORS[cls] if cls else (160, 160, 160)
                         label = PT_LABEL[cls] if cls else 'analisando...'
-                        x1, y1, x2, y2 = xyxy
                         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                         cv2.putText(frame, f'#{tid} {label}', (x1, max(18, y1 - 6)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            now = time.time()
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - t_prev, 1e-6))
             t_prev = now
             draw_hud(frame, locked, fps, paused, bool(session_dir))
@@ -197,7 +217,8 @@ def main():
             if k == ord('q'):
                 break
             if k == ord(' '):
-                votes.clear(); seen.clear(); locked.clear(); best.clear()
+                votes.clear(); seen.clear(); first_seen.clear()
+                locked.clear(); smooth.clear(); best.clear()
             if k == ord('p'):
                 paused = not paused
     finally:

@@ -59,8 +59,15 @@ Ajustes úteis:
 ```bash
 python vigil_deck.py --imgsz 480         # mais FPS (menos resolução)
 python vigil_deck.py --conf 0.4          # menos detecção fraca
+python vigil_deck.py --hold 5            # observa 5s cada grão antes de fechar a classe
 python vigil_deck.py --model /caminho/outro.pt
 ```
+
+> **Segure a câmera parada sobre os grãos.** O grão só fecha a classe depois de
+> `--hold` segundos observando (padrão **3s**) — filmar rápido demais fecha veredito
+> errado. As caixas são suavizadas (não tremem) e detecções piscantes de 1-2 frames
+> são ignoradas, pra caixa não ficar bagunçada. Errar a *classe* tudo bem; o que
+> evitamos é caixa mal posicionada.
 
 ## 4. Câmera do celular
 
