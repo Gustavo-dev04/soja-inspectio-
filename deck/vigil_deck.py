@@ -102,6 +102,9 @@ def main():
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270],
                     help='girar a imagem (útil p/ celular em pé)')
     ap.add_argument('--list-cameras', action='store_true', help='lista as câmeras e sai')
+    ap.add_argument('--device', default=None,
+                    help='dispositivo de inferência: cpu, 0 (GPU CUDA) ou, com modelo '
+                         'exportado p/ OpenVINO, "intel:gpu" / "intel:cpu" / "intel:npu"')
     args = ap.parse_args()
 
     if args.list_cameras:
@@ -139,7 +142,7 @@ def main():
                 # detecta+rastreia no frame JÁ rotacionado -> caixas sempre batem
                 r = model.track(frame, imgsz=args.imgsz, conf=args.conf, iou=0.5,
                                 agnostic_nms=True, tracker='bytetrack.yaml',
-                                persist=True, verbose=False)[0]
+                                persist=True, verbose=False, device=args.device)[0]
                 if r.boxes.id is not None:
                     for xyxy, tid, c, cf in zip(r.boxes.xyxy.cpu().numpy().astype(int),
                                                 r.boxes.id.int().tolist(),
