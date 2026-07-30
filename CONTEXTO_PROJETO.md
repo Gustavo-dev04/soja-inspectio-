@@ -310,11 +310,14 @@ Sequência de estágios testada, todos julgados no mesmo `teste_soja.mp4`:
    ressalva importante:** `immature` ficou com **recall 0,041** (AP 0,147) e
    `spotted` com AP 0,299, enquanto `broken` 0,859 / `intact` 0,810 /
    `skin-damaged` 0,674. Recall 4% significa que o modelo *parou de prever*
-   `immature`, não que aprendeu a distinguir — num vídeo sem grão imaturo, as
-   duas coisas são visualmente idênticas. Causa: só **56 recortes únicos** de
-   `immature` e **35** de `spotted` nas capturas (contra 122/classe nas fotos
-   reais), oversampled 7× e 11× pro pool. O gargalo agora é **quantidade de
-   grão real distinto**, não receita.
+   `immature`, não que aprendeu a distinguir. **O `teste_soja.mp4` não tem
+   nenhum grão imaturo** (confirmado), então o vídeo não valida essa classe —
+   decisão consciente: o FT4 é o melhor ponto **para o dado de hoje**, e
+   `immature` vira backlog. Se um lote com imaturo entrar na linha, este
+   modelo deixa passar. Causa: só **56 recortes únicos** de `immature` e
+   **35** de `spotted` nas capturas (contra 122/classe nas fotos reais),
+   oversampled 7× e 11× pro pool. O gargalo agora é **quantidade de grão
+   real distinto**, não receita.
 
 **O achado mais útil da sequência** veio do FT4, e não é o que parecia: a
 melhora não foi por qualidade de *imagem*, foi por qualidade de **rótulo**. As

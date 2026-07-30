@@ -263,8 +263,16 @@ O val do FT4 (mAP 0,631 no melhor checkpoint) revela um detalhe invisível no v�
 
 **Recall 0,041 em `immature`**: o modelo praticamente parou de prever essa classe.
 A confusão imaturo↔intacto sumiu do vídeo porque ele quase não chuta mais
-"imaturo" — não porque passou a distinguir os dois. Num vídeo **sem** grão
-imaturo, "não confundir" e "não detectar" são visualmente idênticos.
+"imaturo" — não porque passou a distinguir os dois.
+
+⚠️ **Confirmado com o dono: o `teste_soja.mp4` não tem nenhum grão imaturo.**
+Logo, "não confundir" e "não detectar" produzem exatamente a mesma imagem nesse
+vídeo, e **o vídeo não valida a classe `immature` de forma alguma** — o val é o
+único sinal que existe pra ela, e ele diz que a classe está fraca. Isso não
+invalida o FT4 como melhor escolha *para o dado de hoje* (decisão consciente do
+dono), mas fica registrado: **se um lote com grão imaturo entrar na linha, este
+modelo vai deixar passar**. Reavaliar antes de qualquer uso com lote diferente
+do que foi filmado.
 
 Causa provável: **falta de variedade**, não de receita. Contagem de recortes
 únicos disponíveis por fonte:
