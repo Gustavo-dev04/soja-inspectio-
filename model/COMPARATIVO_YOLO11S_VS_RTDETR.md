@@ -223,6 +223,67 @@ COCO → base 12,5k (pseudo-rótulo Otsu) → fine-tune no domínio real.
 | **FT1** (fotos reais + vídeo de defeito + cenas sintéticas) | val misto (single+cena), balanceado | mAP50-95 0,826 (v2); no vídeo, forte em intacto (~84%), fraco em achar defeito |
 | FT2 (capturas do `vigil_deck`, 100% cena sintética) | val misto, balanceado | mAP50-95 0,375 (v2), classes colapsadas (skin-damaged 0,13, immature 0,20) — **catastrophic forgetting**: perdeu no vídeo até pro FT1 sozinho |
 | **FT3** (capturas + 30% replay do FT1, val misto das 2 fontes) | experience replay, técnica já usada na era EfficientNet (`gerar_relatorio.py`, §7-8) | **melhor dos dois mundos no vídeo** — resolveu o esquecimento do FT2 sem perder o que o FT1 tinha, caixas boas *(avaliação visual do dono)* |
+| **FT4** (fonte de recorte escolhida **por classe** nas cenas) | `broken`/`skin-damaged` da foto real, `spotted`/`immature` da captura, `intact` meio a meio | **campeão — o "sweet spot"**: parou de confundir `immature` com `intact` e manteve o resto das classes bem *(avaliação visual do dono)* |
+
+### O que o FT4 realmente consertou (importante, e não é o que parecia)
+
+A hipótese ao montar o FT4 era de **qualidade de imagem**: cada fonte teria fotos
+melhores de classes diferentes. O que aconteceu na prática foi outra coisa — as
+fotos de `immature` do FT1 estavam **mal rotuladas** (erro de anotação do dono),
+e ensinavam o modelo que "imaturo se parece com intacto". Trocar a fonte dessa
+classe não deu imagens melhores ao modelo: **removeu o contra-exemplo errado do
+treino**.
+
+Ou seja, o `FONTE_POR_CLASSE` funcionou como **filtro de qualidade de rótulo**,
+não de imagem. Consequências práticas:
+
+- É um **contorno**, não uma correção. O dado ruim continua lá em
+  `Soja total/.../Immature soybeans` e volta a atrapalhar em qualquer receita
+  que use aquela pasta (inclusive o FT1 e o FT3).
+- Pode haver contaminação parecida **em outras classes** que ainda não apareceu
+  porque não foi isolada por nenhum experimento. Vale rodar o campeão sobre as
+  fotos do FT1 e revisar aquelas em que o modelo discorda com confiança alta da
+  pasta — é exatamente o fluxo do `model/aprendizado_ativo.ipynb` (correção
+  humana → re-treino).
+- Corrigir o rótulo na origem provavelmente **melhora ainda mais** que contornar,
+  porque devolve ao treino as fotos de `immature` do FT1 (mais dado), em vez de
+  descartá-las.
+
+### Ressalva que só o val mostra: "parou de confundir" ≠ "aprendeu a detectar"
+
+O val do FT4 (mAP 0,631 no melhor checkpoint) revela um detalhe invisível no vídeo:
+
+| classe | AP 50-95 | precisão | **recall** | fonte do recorte |
+|---|---|---|---|---|
+| broken | 0,859 | 0,865 | 0,768 | foto real |
+| intact | 0,810 | 0,660 | 0,912 | 50/50 |
+| skin-damaged | 0,674 | 0,669 | 0,703 | foto real |
+| spotted | 0,299 | 0,360 | 0,596 | captura |
+| **immature** | **0,147** | 0,246 | **0,041** | captura |
+
+**Recall 0,041 em `immature`**: o modelo praticamente parou de prever essa classe.
+A confusão imaturo↔intacto sumiu do vídeo porque ele quase não chuta mais
+"imaturo" — não porque passou a distinguir os dois. Num vídeo **sem** grão
+imaturo, "não confundir" e "não detectar" são visualmente idênticos.
+
+Causa provável: **falta de variedade**, não de receita. Contagem de recortes
+únicos disponíveis por fonte:
+
+```
+foto real: broken 122, immature 122, intact 122, skin-damaged 122, spotted 122
+captura:   broken  99, immature  56, intact  22, skin-damaged  42, spotted  35
+```
+
+O pool pede 400/classe: `immature` sai de 56 únicos (7× duplicação) e `spotted`
+de 35 (11×). As duas classes com menos recortes únicos são exatamente as duas
+com AP baixo; as fortes vêm das fotos reais, com 122 cada. O gargalo agora é
+**quantidade de grão real distinto**, não escolha de fonte nem hiperparâmetro.
+
+Dois caminhos, na ordem de custo-benefício:
+1. **Corrigir os rótulos de `immature` no FT1** (`aprendizado_ativo.ipynb`) —
+   devolve 122 recortes bons e mata o problema na raiz. Mais barato que capturar.
+2. **Capturar mais grãos de `immature` e `spotted`** com o `vigil_deck` — alvo
+   de pelo menos ~100 únicos por classe, pra igualar o que as fotos reais já têm.
 
 ### Dois resultados negativos registrados no caminho
 
@@ -258,7 +319,8 @@ Vale registrar porque quase levaram a descartar o RF-DETR por engano:
 
 | Papel | Modelo | Status |
 |---|---|---|
-| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT3 (replay)** | campeão da família RF-DETR até aqui; export ONNX pronto (`soja_rfdetr_small_CAMPEAO.onnx`) |
+| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT4 (fonte por classe)** | campeão da família RF-DETR; export ONNX pronto (`soja_rfdetr_small_CAMPEAO.onnx`) |
+| Segunda opinião | RF-DETR Small — FT3 (replay) | bom, mas ainda confundia `immature` × `intact` |
 | Pendente | Engine TensorRT no Jetson físico | `.engine` precisa ser gerado no próprio aparelho; fps do `trtexec` decide se entra em produção |
 | Comparação pendente | RF-DETR Small (FT3) vs YOLO11n/s destilado do 11x | mesmo vídeo, mesmo pipeline — quem for melhor em qualidade E rodar em tempo real no Orin Nano vence |
 

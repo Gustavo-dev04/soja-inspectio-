@@ -262,7 +262,7 @@ escasso" fica restrita ao regime de capacidade igual/menor.
 | Modo foto (produção, web) | YOLO11s-cls (`soja_yolo11s_finetuned.pt`) | no ar, intocado |
 | Vídeo / demo (GPU) | **YOLO11x_v3** (`soja_yolo11x_v3.pt`, com fine-tune multi-grão `soja_yolo11x_multi_v3.pt`) | campeão atual; servido via Colab+túnel |
 | Reserva / segunda opinião | RT-DETR-l ft_v3 | arquivado no Drive |
-| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT3 (experience replay)** | ver §5.3; export ONNX pronto, falta engine TensorRT no aparelho |
+| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT4 (fonte de recorte por classe)** | ver §5.3; export ONNX pronto, falta engine TensorRT no aparelho |
 | Local / edge (futuro, CPU/iGPU) | YOLO11s ou 11m via destilação | professor da destilação passa a ser o YOLO11x |
 | Steam Deck (local, sem GPU) | `soja_yolo11n_base12k_v2.pt` (nano) | roda em CPU/iGPU, ~10-20 fps |
 
@@ -303,6 +303,29 @@ Sequência de estágios testada, todos julgados no mesmo `teste_soja.mp4`:
    `gerar_relatorio.py` §7-8): **melhor dos dois mundos no vídeo** — resolveu
    o esquecimento do FT2 sem perder o que o FT1 sabia; caixas boas também
    *(avaliação visual do dono)*.
+5. **FT4** (fonte do recorte escolhida **por classe** nas cenas sintéticas —
+   `broken`/`skin-damaged` da foto real, `spotted`/`immature` da captura,
+   `intact` meio a meio): **campeão no vídeo** — parou de confundir `immature`
+   com `intact` e manteve as outras classes bem. **Mas o val expõe uma
+   ressalva importante:** `immature` ficou com **recall 0,041** (AP 0,147) e
+   `spotted` com AP 0,299, enquanto `broken` 0,859 / `intact` 0,810 /
+   `skin-damaged` 0,674. Recall 4% significa que o modelo *parou de prever*
+   `immature`, não que aprendeu a distinguir — num vídeo sem grão imaturo, as
+   duas coisas são visualmente idênticas. Causa: só **56 recortes únicos** de
+   `immature` e **35** de `spotted` nas capturas (contra 122/classe nas fotos
+   reais), oversampled 7× e 11× pro pool. O gargalo agora é **quantidade de
+   grão real distinto**, não receita.
+
+**O achado mais útil da sequência** veio do FT4, e não é o que parecia: a
+melhora não foi por qualidade de *imagem*, foi por qualidade de **rótulo**. As
+fotos de `immature` do FT1 estavam mal anotadas e ensinavam o modelo que
+"imaturo se parece com intacto"; trocar a fonte dessa classe removeu o
+contra-exemplo errado do treino. Isso é um **contorno, não uma correção** — o
+dado ruim continua na pasta de origem e volta a atrapalhar em qualquer receita
+que a use. Pode haver contaminação parecida em outras classes ainda não
+isoladas; o fluxo pra caçar isso já existe no projeto
+(`model/aprendizado_ativo.ipynb`: rodar o campeão sobre as fotos, revisar onde
+ele discorda da pasta com confiança alta, corrigir e re-treinar).
 
 Dois resultados negativos registrados no caminho (útil pra não repetir):
 balancear o **train** por classe (não só o val) viciou o modelo pró-defeito
