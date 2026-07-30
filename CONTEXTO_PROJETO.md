@@ -330,6 +330,14 @@ isoladas; o fluxo pra caçar isso já existe no projeto
 (`model/aprendizado_ativo.ipynb`: rodar o campeão sobre as fotos, revisar onde
 ele discorda da pasta com confiança alta, corrigir e re-treinar).
 
+**Decidido não corrigir o rótulo de `immature`, e sim capturar grão novo:** o
+erro ali foi sistemático (as fotos não são de grãos imaturos), então relabelar
+só as moveria pra `intact` — que já sobra — sem devolver nada a `immature`.
+Correção de rótulo recupera dado quando o rótulo está *trocado*, não quando o
+objeto fotografado é outro. Alvo da coleta: ~120 grãos únicos de `immature` e
+~120 de `spotted` (hoje: 56 e 35), o que iguala as classes fortes e elimina o
+oversampling de 7×/11× do pool.
+
 Dois resultados negativos registrados no caminho (útil pra não repetir):
 balancear o **train** por classe (não só o val) viciou o modelo pró-defeito
 num vídeo majoritariamente intacto; e treinar o fine-tune final só nas

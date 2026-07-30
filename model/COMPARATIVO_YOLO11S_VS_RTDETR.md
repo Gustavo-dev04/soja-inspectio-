@@ -287,11 +287,29 @@ de 35 (11×). As duas classes com menos recortes únicos são exatamente as duas
 com AP baixo; as fortes vêm das fotos reais, com 122 cada. O gargalo agora é
 **quantidade de grão real distinto**, não escolha de fonte nem hiperparâmetro.
 
-Dois caminhos, na ordem de custo-benefício:
-1. **Corrigir os rótulos de `immature` no FT1** (`aprendizado_ativo.ipynb`) —
-   devolve 122 recortes bons e mata o problema na raiz. Mais barato que capturar.
-2. **Capturar mais grãos de `immature` e `spotted`** com o `vigil_deck` — alvo
-   de pelo menos ~100 únicos por classe, pra igualar o que as fotos reais já têm.
+**Caminho decidido: capturar grão imaturo de verdade** (não corrigir rótulo).
+
+Cogitou-se corrigir os rótulos de `immature` do FT1 via `aprendizado_ativo.ipynb`,
+mas o dono descartou com razão: o erro foi **sistemático**, não uma troca de
+pasta. As fotos daquela pasta não são de grãos imaturos — relabelar só as moveria
+pra `intact` (classe que já sobra) e `immature` continuaria com os mesmos 56
+recortes. Correção de rótulo recupera dado quando o rótulo está *trocado*; quando
+o objeto fotografado é outro, não há o que recuperar.
+
+Foto nova ainda tem a vantagem de vir do **domínio de uso real** (setup do
+`vigil_deck`), enquanto as fotos do FT1 são de outro domínio.
+
+Alvo da coleta (mesma sessão dá conta das duas classes fracas):
+
+| classe | únicos hoje | alvo | por quê |
+|---|---|---|---|
+| `immature` | 56 (capturas) | **~120** | recall 0,041 — classe efetivamente inoperante |
+| `spotted` | 35 (capturas) | **~120** | AP 0,299, precisão 0,360 — chuta demais |
+
+120 iguala o que as fotos reais já dão nas classes fortes (122/classe), e elimina
+o oversampling de 7×/11× que o pool faz hoje. Protocolo de captura: fundo preto
+fosco, luz difusa de cima, mesma distância de uso — `vigil_deck.py --save-dir`
+já grava recorte + `revisao.csv` no formato que o pipeline lê.
 
 ### Dois resultados negativos registrados no caminho
 
