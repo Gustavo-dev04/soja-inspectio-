@@ -202,3 +202,68 @@ visual de acurácia premium pelo dono.
 O auto-treino v4 (vídeos por classe) passa a usar o **YOLO11x como professor**
 das caixas (classe continua vindo da pasta) — adaptação junto com a leitura da
 pasta de vídeos.
+
+---
+
+## 11. ADENDO — RF-DETR Small, mira no Jetson Orin Nano
+
+Motivação: os campeões de vídeo (RT-DETR-l, YOLO11x) são modelos de servidor —
+inviáveis em tempo real num Jetson Orin Nano (8GB, ~67 TOPS INT8). O RF-DETR
+(família da Roboflow, mesmo espírito DETR do RT-DETR mas com backbone DINOv2 e
+NAS de arquitetura) publica variantes Nano/Small/Medium com latência de poucos
+ms na T4 via TensorRT — candidato natural pra edge. Testado o **Small** (32,1M
+params, patch 16, resolução 512/672 multi-scale) pelo mesmo caminho de estágios:
+COCO → base 12,5k (pseudo-rótulo Otsu) → fine-tune no domínio real.
+
+### Histórico de treinos (`model/treino_rfdetr_small_completo.ipynb`)
+
+| Rodada | Dado de treino | Resultado no `teste_soja.mp4` |
+|---|---|---|
+| estágio 1 (base 12,5k) | 1 grão/imagem, pseudo-rótulo Otsu | mAP50-95 0,985 no val — saturou rápido (tarefa fácil, mesmo padrão do RT-DETR base_12k) |
+| **FT1** (fotos reais + vídeo de defeito + cenas sintéticas) | val misto (single+cena), balanceado | mAP50-95 0,826 (v2); no vídeo, forte em intacto (~84%), fraco em achar defeito |
+| FT2 (capturas do `vigil_deck`, 100% cena sintética) | val misto, balanceado | mAP50-95 0,375 (v2), classes colapsadas (skin-damaged 0,13, immature 0,20) — **catastrophic forgetting**: perdeu no vídeo até pro FT1 sozinho |
+| **FT3** (capturas + 30% replay do FT1, val misto das 2 fontes) | experience replay, técnica já usada na era EfficientNet (`gerar_relatorio.py`, §7-8) | **melhor dos dois mundos no vídeo** — resolveu o esquecimento do FT2 sem perder o que o FT1 tinha, caixas boas *(avaliação visual do dono)* |
+
+### Dois resultados negativos registrados no caminho
+
+1. **Balancear o pool de recorte do *train* por classe** (não só o val) criou
+   viés pró-defeito: as cenas de treino ficaram ~20% por classe enquanto o
+   vídeo real é majoritariamente `intact`, e isso piorou o resultado (FT1_v2
+   ainda foi melhor que FT2_v2, mas o balanceamento de train foi retirado da
+   receita de produção — só o *val* deve ser balanceado, o *train* deve
+   espelhar o prior real).
+2. **FT2 sozinho (só capturas) perde pro FT1 sozinho.** Cena sintética feita de
+   recorte de capturas já recortadas (recorte de recorte, fundo gerado) é dado
+   mais artificial que fotos reais + frames de vídeo real — treinar só nele
+   apaga o que o estágio anterior aprendeu.
+
+### Bugs de medição encontrados no caminho (não do modelo)
+
+Vale registrar porque quase levaram a descartar o RF-DETR por engano:
+
+- **Off-by-one no mapeamento de classe** na primeira rodada de avaliação em
+  vídeo: `category_id` do COCO (1-indexado) usado direto contra `class_id` do
+  rfdetr (0-indexado) — deslocava todo rótulo em 1 e tornava `spotted`
+  inalcançável. Corrigido detectando a base pelos ids realmente vistos no vídeo.
+- **`sv.ByteTrack` depreciado** (supervision ≥ 0.28) devolve `tracker_id` vazio
+  em silêncio — zerava todos os votos mesmo com o modelo detectando 10
+  caixas/frame. Corrigido com fallback pro `ByteTrackTracker` do pacote
+  `trackers`.
+- **`model.inference(dtype=torch.float16)` não ajudava** (38 ms vs 36 ms em
+  eager) e uma vez chegou a zerar detecções por causa do trace não generalizar
+  pro shape do vídeo — desligado por padrão (`USE_FP16=False`); o número de
+  latência que importa é o do TensorRT no próprio Jetson, não o eager do Colab.
+
+### Papel atual
+
+| Papel | Modelo | Status |
+|---|---|---|
+| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT3 (replay)** | campeão da família RF-DETR até aqui; export ONNX pronto (`soja_rfdetr_small_CAMPEAO.onnx`) |
+| Pendente | Engine TensorRT no Jetson físico | `.engine` precisa ser gerado no próprio aparelho; fps do `trtexec` decide se entra em produção |
+| Comparação pendente | RF-DETR Small (FT3) vs YOLO11n/s destilado do 11x | mesmo vídeo, mesmo pipeline — quem for melhor em qualidade E rodar em tempo real no Orin Nano vence |
+
+Ressalva de sempre: "melhor no vídeo" aqui é avaliação visual de um dono que já
+viu muitos desses comparativos — não benchmark rotulado, e o vídeo de teste é
+majoritariamente `intact`. Falta um vídeo de lote **propositalmente ruim**
+(defeito conhecido) pra medir recall de defeito de verdade antes de confiar
+nesse candidato em produção.

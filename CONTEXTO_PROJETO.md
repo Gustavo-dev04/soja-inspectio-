@@ -262,7 +262,8 @@ escasso" fica restrita ao regime de capacidade igual/menor.
 | Modo foto (produção, web) | YOLO11s-cls (`soja_yolo11s_finetuned.pt`) | no ar, intocado |
 | Vídeo / demo (GPU) | **YOLO11x_v3** (`soja_yolo11x_v3.pt`, com fine-tune multi-grão `soja_yolo11x_multi_v3.pt`) | campeão atual; servido via Colab+túnel |
 | Reserva / segunda opinião | RT-DETR-l ft_v3 | arquivado no Drive |
-| Local / edge (futuro) | YOLO11s ou 11m via destilação | professor da destilação passa a ser o YOLO11x |
+| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT3 (experience replay)** | ver §5.3; export ONNX pronto, falta engine TensorRT no aparelho |
+| Local / edge (futuro, CPU/iGPU) | YOLO11s ou 11m via destilação | professor da destilação passa a ser o YOLO11x |
 | Steam Deck (local, sem GPU) | `soja_yolo11n_base12k_v2.pt` (nano) | roda em CPU/iGPU, ~10-20 fps |
 
 **11m testado e descartado por ora:** treinado do zero sem ajuste de receita
@@ -275,6 +276,47 @@ organizados por pasta (`treino/<classe>/`, luz normal + flash) rotulados
 automaticamente pelo YOLO11x (como "professor" de caixas — a classe vem da
 pasta, não do modelo), pra treinar um modelo leve (destilação) que rode bem
 em edge/CPU sem perder tanta qualidade.
+
+### 5.3 RF-DETR Small — teste dedicado pro Jetson Orin Nano
+
+Missão separada: os campeões de vídeo (RT-DETR-l, YOLO11x) são modelos de GPU
+de servidor, inviáveis num Jetson Orin Nano (8GB, ~67 TOPS INT8). O RF-DETR
+(Roboflow, mesma família DETR do RT-DETR, mas backbone DINOv2 com NAS de
+arquitetura) publica variantes Nano/Small/Medium com poucos ms de latência na
+T4 via TensorRT — candidato natural a edge. Testado o **Small** (32,1M
+params, patch 16, resolução 512/672) pelo mesmo caminho: COCO → base 12,5k →
+fine-tune no domínio real (`model/treino_rfdetr_small_completo.ipynb`).
+
+Sequência de estágios testada, todos julgados no mesmo `teste_soja.mp4`:
+
+1. **Estágio 1** (base 12,5k, pseudo-rótulo Otsu): saturou rápido (mAP50-95
+   0,985 no val) — mesmo padrão de tarefa fácil já visto no RT-DETR base_12k.
+2. **FT1** (fotos reais + vídeo de defeito + cenas sintéticas): mAP 0,826,
+   perfil saudável em todas as classes; no vídeo, forte em intacto (~84%) mas
+   fraco em achar defeito.
+3. **FT2** (só capturas do `vigil_deck`, 100% cena sintética): mAP 0,375,
+   classes colapsadas — **catastrophic forgetting**, perdeu no vídeo até pro
+   FT1 sozinho. Cena sintética feita de recorte de captura já recortada
+   (recorte de recorte, fundo gerado) é dado mais artificial que o do FT1.
+4. **FT3** (capturas + 30% *experience replay* do FT1, val misto das duas
+   fontes — mesma técnica de replay 70/30 usada na era EfficientNet, ver
+   `gerar_relatorio.py` §7-8): **melhor dos dois mundos no vídeo** — resolveu
+   o esquecimento do FT2 sem perder o que o FT1 sabia; caixas boas também
+   *(avaliação visual do dono)*.
+
+Dois resultados negativos registrados no caminho (útil pra não repetir):
+balancear o **train** por classe (não só o val) viciou o modelo pró-defeito
+num vídeo majoritariamente intacto; e treinar o fine-tune final só nas
+capturas, sem nenhum replay do estágio anterior, apaga o que já tinha sido
+aprendido. Histórico completo, incluindo bugs de medição no caminho (off-by-one
+de classe, tracker depreciado) em `model/COMPARATIVO_YOLO11S_VS_RTDETR.md` §11.
+
+**Pendente:** gerar o engine TensorRT **no Jetson físico** (o `.pt`/ONNX não
+diz o fps real — só o `trtexec` no aparelho decide), e comparar contra o
+YOLO11s/11n nesse hardware específico. Falta também um vídeo de lote
+propositalmente ruim (defeito conhecido) pra medir recall de defeito — o
+vídeo de teste atual é majoritariamente `intact`, o que não distingue
+"modelo bom" de "modelo viciado em dizer intacto".
 
 ---
 
