@@ -1,0 +1,111 @@
+# Vígil.ia no Jetson Orin Nano — RF-DETR Small via TensorRT
+
+Leva o modelo campeão da família RF-DETR (**FT4**, fonte de recorte por classe)
+pro Jetson e responde a pergunta que motivou o experimento inteiro:
+**cabe em tempo real num Orin Nano?**
+
+---
+
+## 0. Antes de tudo: o `.pth` não é o arquivo que roda aqui
+
+| arquivo | onde vive | serve pra |
+|---|---|---|
+| `.pth` | Colab / Drive | treinar e avaliar (precisa de `rfdetr` + torch) |
+| `.onnx` | ponte | formato neutro, gerado **no Colab** |
+| `.engine` | **só neste Jetson** | o que realmente roda rápido |
+
+Instalar `rfdetr` + torch no Jetson é possível mas dolorido (torch pro Jetson é
+build especial da Nvidia). O caminho certo é exportar o ONNX no Colab, onde tudo
+já está instalado, e trazer só ele.
+
+⚠️ **A `.engine` é atada a este aparelho + esta versão de TensorRT.** Não dá pra
+gerar no PC e copiar; e se atualizar o JetPack, reconstrua.
+
+## 1. Gerar o ONNX (no Colab, não aqui)
+
+No `model/treino_rfdetr_small_completo.ipynb`, rode a célula **"Export ONNX"**:
+
+```python
+!pip -q install onnx onnxruntime
+```
+
+Ela pega o campeão (`FT4 → FT3 → FT1`, o primeiro que existir), valida o grafo e
+salva `soja_rfdetr_small_CAMPEAO.onnx` no Drive. **Anote o shape de entrada que
+ela imprime** — se for fixo (ex. `[1, 3, 512, 512]`), o pré-processamento no
+Jetson precisa fazer letterbox pra exatamente esse tamanho.
+
+## 2. Copiar pro Jetson
+
+```bash
+# do seu PC, com o Jetson na mesma rede
+scp soja_rfdetr_small_CAMPEAO.onnx usuario@IP_DO_JETSON:~/vigilia/
+scp bench_trt.sh                   usuario@IP_DO_JETSON:~/vigilia/
+```
+
+(ou baixe direto do Drive pelo navegador do Jetson, se tiver desktop)
+
+## 3. Construir a engine e medir
+
+```bash
+cd ~/vigilia
+chmod +x bench_trt.sh
+./bench_trt.sh soja_rfdetr_small_CAMPEAO.onnx fp16
+```
+
+O script:
+1. Põe o Jetson no modo de **máxima potência** (`nvpmodel` + `jetson_clocks`) —
+   sem isso o número sai artificialmente baixo, e é erro comum de benchmark
+2. Constrói a engine FP16 (leva minutos: o TensorRT testa kernels pra escolher
+   o mais rápido)
+3. Mede 100 iterações e imprime throughput + latência
+
+### Como ler o resultado
+
+O `Throughput` em **qps** é o que o **modelo** aguenta sozinho. O app real fica
+abaixo disso, porque decodificar vídeo, rastrear e desenhar custam à parte.
+
+| throughput do modelo | leitura |
+|---|---|
+| **> 40 qps** | folga confortável — o app real deve passar de 20 fps |
+| **20-40 qps** | viável; o app fica em ~10-20 fps, suficiente pro veredito travado |
+| **10-20 qps** | apertado — tentar INT8 ou cair pro RF-DETR **Nano** (384px) |
+| **< 10 qps** | Small não serve pro Orin Nano; testar Nano ou voltar pro YOLO |
+
+Referência pra calibrar expectativa: o RF-DETR Small em DeepStream num **AGX
+Orin** (chip bem maior, até 275 TOPS contra ~67 do Orin Nano) deu **151 fps
+FP16**. Escalando grosseiramente por TOPS, o Orin Nano cairia na faixa de
+~35-40 — mas isso é extrapolação, e é justamente por isso que se mede.
+
+## 4. Se o FP16 não bastar
+
+Em ordem de custo:
+
+1. **RF-DETR Nano** em vez do Small — 384px em vez de 512, ~2,3 ms na T4 contra
+   3,5 ms do Small. Precisa re-treinar (mesmo notebook, trocando a classe), mas
+   o pipeline de dados já está pronto e validado.
+2. **INT8** — `./bench_trt.sh ... int8` dá o teto de velocidade, **mas sem
+   calibração a acurácia cai**. Se o ganho compensar, o caminho certo é
+   Quantization-Aware Training (TAO Toolkit da Nvidia), que treina o modelo já
+   sabendo que vai ser quantizado e perde bem menos.
+3. **DeepStream** — só vale quando o gargalo for o pipeline de vídeo (decodificar,
+   copiar CPU↔GPU) ou quando houver **várias câmeras**. Pra uma câmera só, é
+   complexidade sem retorno. A Roboflow publicou parser pronto pro RF-DETR, então
+   quando fizer sentido, a parte difícil já existe.
+
+## 5. Depois da medição
+
+Com a engine validada, o próximo passo é o app de inferência ao vivo — o
+equivalente do `deck/vigil_deck.py`, mas consumindo a `.engine` via TensorRT em
+vez do `.pt` via ultralytics, mantendo a mesma regra de **voto exigente por
+classe** e **veredito travado por grão**.
+
+---
+
+## Limitação conhecida do modelo atual
+
+O FT4 tem `broken` (AP 0,86), `intact` (0,81) e `skin-damaged` (0,67) sólidos,
+mas **`immature` está praticamente inoperante** (recall 0,041) e `spotted` é
+fraco (AP 0,30) — falta grão único desses dois tipos no dataset (56 e 35, contra
+122 das classes fortes). O vídeo de teste não tem grão imaturo, então isso não
+aparece nele. **Um lote com grão imaturo passaria batido por este modelo.**
+Detalhes em `model/COMPARATIVO_YOLO11S_VS_RTDETR.md` §11.
