@@ -133,6 +133,26 @@ classe** e **veredito travado por grão**.
 
 ---
 
+## Comportamento esperado: multi-grão bom, grão solto ruim
+
+**É de propósito, não é defeito.** O FT4 foi treinado assim (números do build):
+
+```
+fotos soltas : 1892 imagens × 1 caixa  =  1.892 caixas  (9%)
+cenas        : 1200 imagens × 6-25     = 18.477 caixas  (91%)
+```
+
+**91% do treino é cena densa.** Junte a isso o fato de a família DETR aprender um
+prior de *quantos objetos existem no quadro* (foi o mesmo mecanismo que quebrou o
+FT2, ver `model/COMPARATIVO_YOLO11S_VS_RTDETR.md` §11) e o resultado é o
+esperado: um grão sozinho, preenchendo o quadro, está fora da distribuição de
+treino — nas cenas o grão ocupa 60-150 px num canvas de 640.
+
+Isso está alinhado com o uso real: inspeção de lote é multi-grão por definição.
+**Se algum dia precisar de estação de grão único** (conferência final, por
+exemplo), não "conserte" este modelo — ou treine um com mistura diferente, ou use
+o classificador do modo foto (YOLO11s-cls), que é feito pra isso.
+
 ## Limitação conhecida do modelo atual
 
 O FT4 tem `broken` (AP 0,86), `intact` (0,81) e `skin-damaged` (0,67) sólidos,

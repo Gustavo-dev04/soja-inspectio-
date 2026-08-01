@@ -368,6 +368,42 @@ grão precisa. **Não** foi preciso INT8, nem cair pro RF-DETR Nano, nem DeepStr
 Nota de método: a estimativa prévia era ~35-40 qps, extrapolada dos 151 fps do
 AGX Orin pela razão de TOPS (~275 vs ~67). O medido veio **acima** — escalar
 performance por TOPS subestima; vale medir em vez de extrapolar.
+
+### Comportamento no aparelho: ótimo em multi-grão, ruim em grão solto
+
+Observado rodando ao vivo no Jetson: com vários grãos no quadro o modelo vai
+**muito bem**; com um grão só, a saída degrada. **É consequência direta do
+dataset, não defeito** — e está alinhado com o uso real (inspeção de lote é
+multi-grão por definição).
+
+O FT4 foi montado assim:
+
+| origem | imagens | caixas | % das caixas |
+|---|---|---|---|
+| fotos soltas (1 grão) | 1.892 | 1.892 | **9%** |
+| cenas sintéticas (6-25 grãos) | 1.200 | 18.477 | **91%** |
+
+Com 91% do treino em cena densa, mais o prior de contagem de objetos que a
+família DETR aprende (o mesmo mecanismo que quebrou o FT2), um grão sozinho
+preenchendo o quadro fica fora da distribuição — nas cenas o grão ocupa
+60-150 px num canvas de 640.
+
+**Se um dia precisar de estação de grão único**, não ajuste este modelo: ou
+treine um com mistura diferente, ou use o classificador do modo foto
+(YOLO11s-cls), que existe exatamente pra esse caso.
+
+### Bug de leitura encontrado no app do Jetson (não do modelo)
+
+Primeira execução ao vivo devolveu **`immature` para tudo** — o oposto do que o
+val diz (recall 0,041 nessa classe). Era off-by-one de novo: a cabeça exporta 6
+colunas para 5 classes, e a coluna extra ficou assumida como fundo **na frente**
+(estilo COCO) quando o DETR põe o *no-object* **no fim**. Ler a partir do índice
+1 deslocava `intact` (coluna 2) para `immature`.
+
+Terceira ocorrência do mesmo tipo de erro no projeto. Por isso o
+`jetson/vigil_jetson.py` agora acumula um **histograma das colunas cruas** e tem
+`--diag`, que responde "onde as classes realmente estão" com dado em vez de
+convenção presumida.
 | Pendente | Engine TensorRT no Jetson físico | `.engine` precisa ser gerado no próprio aparelho; fps do `trtexec` decide se entra em produção |
 | Comparação pendente | RF-DETR Small (FT3) vs YOLO11n/s destilado do 11x | mesmo vídeo, mesmo pipeline — quem for melhor em qualidade E rodar em tempo real no Orin Nano vence |
 
