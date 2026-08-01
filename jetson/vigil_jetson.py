@@ -65,6 +65,21 @@ def veredito(cnt):
 
 
 # ---------------------------------------------------------------- CUDA
+def _cuda_runtime():
+    """Importa o runtime do cuda-python.
+
+    O layout mudou entre as versões: no 12.x era `from cuda import cudart`;
+    no 13.x virou `cuda.bindings.runtime`. Tenta os dois em vez de assumir.
+    """
+    import importlib
+    for mod in ('cuda.bindings.runtime', 'cuda.cudart', 'cuda.runtime'):
+        try:
+            return importlib.import_module(mod)
+        except ImportError:
+            continue
+    return None
+
+
 class Cuda:
     """Memória CUDA por pycuda ou cuda-python — o que estiver instalado."""
 
@@ -74,10 +89,11 @@ class Cuda:
             import pycuda.driver as drv
             self.drv, self.api = drv, 'pycuda'
         except ImportError:
-            try:
-                from cuda import cudart
-                self.rt, self.api = cudart, 'cuda-python'
-            except ImportError:
+            rt = _cuda_runtime()
+            if rt is not None:
+                self.rt, self.api = rt, 'cuda-python'
+                print(f'CUDA via cuda-python ({rt.__name__})')
+            else:
                 sys.exit(
                     'preciso de cuda-python OU pycuda pra alocar memória na GPU.\n'
                     '\n'
@@ -98,32 +114,41 @@ class Cuda:
                     '  (num venv, crie com --system-site-packages: o tensorrt vem\n'
                     '   do sistema, via JetPack, e não do pip)')
 
+    @staticmethod
+    def _ok(ret, oque):
+        """cuda-python devolve (err, …) — erro silencioso aqui vira detecção
+        lixo depois, então falha alto."""
+        err = ret[0] if isinstance(ret, (tuple, list)) else ret
+        if int(err) != 0:
+            raise RuntimeError(f'{oque} falhou (código CUDA {int(err)})')
+        return ret
+
     def alloc(self, nbytes):
         if self.api == 'pycuda':
             return self.drv.mem_alloc(nbytes)
-        err, ptr = self.rt.cudaMalloc(nbytes)
-        assert err == 0, f'cudaMalloc falhou: {err}'
-        return ptr
+        return self._ok(self.rt.cudaMalloc(nbytes), 'cudaMalloc')[1]
 
     def h2d(self, dst, src):
         if self.api == 'pycuda':
             self.drv.memcpy_htod(dst, src)
         else:
-            self.rt.cudaMemcpy(dst, src.ctypes.data, src.nbytes,
-                               self.rt.cudaMemcpyKind.cudaMemcpyHostToDevice)
+            self._ok(self.rt.cudaMemcpy(
+                dst, src.ctypes.data, src.nbytes,
+                self.rt.cudaMemcpyKind.cudaMemcpyHostToDevice), 'cudaMemcpy H2D')
 
     def d2h(self, dst, src):
         if self.api == 'pycuda':
             self.drv.memcpy_dtoh(dst, src)
         else:
-            self.rt.cudaMemcpy(dst.ctypes.data, src, dst.nbytes,
-                               self.rt.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            self._ok(self.rt.cudaMemcpy(
+                dst.ctypes.data, src, dst.nbytes,
+                self.rt.cudaMemcpyKind.cudaMemcpyDeviceToHost), 'cudaMemcpy D2H')
 
     def sync(self):
         if self.api == 'pycuda':
             self.drv.Context.synchronize()
         else:
-            self.rt.cudaDeviceSynchronize()
+            self._ok(self.rt.cudaDeviceSynchronize(), 'cudaDeviceSynchronize')
 
     def ptr(self, buf):
         return int(buf)
