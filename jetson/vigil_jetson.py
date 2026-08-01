@@ -158,8 +158,10 @@ class Cuda:
 class RFDetrTRT:
     """Carrega a engine e faz inferência num frame BGR."""
 
-    def __init__(self, engine_path, conf=0.35):
+    def __init__(self, engine_path, conf=0.35, offset=None):
         self.conf = conf
+        self.offset_forcado = offset
+        self.hist_cru = None   # histograma das colunas cruas (diagnóstico)
         self.cuda = Cuda()
         logger = trt.Logger(trt.Logger.ERROR)
         with open(engine_path, 'rb') as f:
@@ -190,15 +192,33 @@ class RFDetrTRT:
         self.box_name = next(n for n in self.saidas if self.shapes[n][-1] == 4)
         self.cls_name = next(n for n in self.saidas if n != self.box_name)
         self.n_cls = self.shapes[self.cls_name][-1]
-        # COCO é 1-indexado: com 5 classes o modelo sai com 6 colunas e a 0 é
-        # fundo. Detecta em vez de assumir (foi assim que o off-by-one passou
-        # despercebido antes).
-        self.offset = self.n_cls - len(NAMES)
+        # Com 5 classes o modelo pode sair com 6 colunas — mas ONDE fica a coluna
+        # extra depende da implementação: COCO 1-indexado põe o fundo na FRENTE,
+        # o DETR clássico põe o "no-object" no FIM. Errar isso desloca todos os
+        # rótulos (foi o que fez `intact` sair como `immature`).
+        # Padrão = 0 (extra no fim). Use --class-offset pra forçar, e o
+        # histograma abaixo pra decidir com dado em vez de chute.
+        self.offset = self.offset_forcado if self.offset_forcado is not None else 0
+        self.hist_cru = np.zeros(self.n_cls, np.int64)
         print(f'engine: entrada {self.W}x{self.H} | {self.shapes[self.box_name][1]} queries '
-              f'| {self.n_cls} colunas de classe -> offset {self.offset}')
-        if self.offset not in (0, 1):
-            print(f'  [aviso] esperava 5 ou 6 colunas, achei {self.n_cls}. '
-                  'Confira o mapeamento de classe.')
+              f'| {self.n_cls} colunas de classe | offset={self.offset}'
+              f'{" (forçado)" if self.offset_forcado is not None else ""}')
+        if self.n_cls > len(NAMES):
+            print(f'  há {self.n_cls - len(NAMES)} coluna(s) a mais que classes — '
+                  'rode --diag pra ver qual coluna realmente dispara')
+
+    def diagnostico_classes(self):
+        """Qual coluna crua está ganhando? Diz onde estão as classes de verdade."""
+        tot = self.hist_cru.sum()
+        if not tot:
+            return 'nenhuma detecção ainda'
+        linhas = ['  coluna crua | detecções | com offset atual seria']
+        for c in range(self.n_cls):
+            i = c - self.offset
+            nome = NAMES[i] if 0 <= i < len(NAMES) else '(fora)'
+            barra = '#' * int(40 * self.hist_cru[c] / tot)
+            linhas.append(f'  {c:^11d} | {self.hist_cru[c]:9d} | {nome:14s} {barra}')
+        return '\n'.join(linhas)
 
     def letterbox(self, frame):
         """Redimensiona mantendo proporção e preenche com preto (igual ao treino)."""
@@ -228,7 +248,13 @@ class RFDetrTRT:
         logits = self.host[self.cls_name][0].astype(np.float32)    # (N,C)
         probs = 1.0 / (1.0 + np.exp(-logits))                      # sigmoid (focal loss)
 
-        # ignora a coluna de fundo quando ela existe
+        # histograma das colunas CRUAS: é o que diz onde as classes realmente
+        # estão, sem depender do offset estar certo
+        cru = probs.argmax(1)
+        forte = probs.max(1) >= self.conf
+        if forte.any():
+            np.add.at(self.hist_cru, cru[forte], 1)
+
         cols = probs[:, self.offset:self.offset + len(NAMES)]
         cls_idx = cols.argmax(1)
         conf = cols.max(1)
@@ -348,10 +374,15 @@ def main():
                     help='segundos observando o grão antes de travar a classe')
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270])
     ap.add_argument('--no-window', action='store_true', help='sem janela (só terminal/arquivo)')
+    ap.add_argument('--class-offset', type=int, default=None,
+                    help='desloca a leitura das colunas de classe (0 = extra no fim, '
+                         '1 = extra na frente). Use --diag pra descobrir o certo.')
+    ap.add_argument('--diag', type=int, default=0, metavar='N',
+                    help='processa N frames, imprime qual coluna de classe dispara, e sai')
     args = ap.parse_args()
 
     print(f'carregando {args.engine} …')
-    modelo = RFDetrTRT(args.engine, conf=args.conf)
+    modelo = RFDetrTRT(args.engine, conf=args.conf, offset=args.class_offset)
     tracker = IoUTracker()
 
     fonte = args.source or args.camera
@@ -387,6 +418,28 @@ def main():
                     '    ls /dev/video*']
         sys.exit('\n'.join(msg))
     print(f'fonte OK: {quadro0.shape[1]}x{quadro0.shape[0]}')
+
+    # ---- modo diagnóstico: descobre onde estão as classes de verdade ----
+    if args.diag:
+        print(f'\ndiagnóstico: {args.diag} frames…')
+        frame = quadro0
+        for i in range(args.diag):
+            if i:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+            if args.rotate:
+                frame = rotate(frame, args.rotate)
+            modelo(frame)
+        cap.release()
+        print('\n=== onde as classes realmente estão ===')
+        print(modelo.diagnostico_classes())
+        print('\nComo ler: a coluna com MAIS detecções deve ser a classe mais comum')
+        print('no seu vídeo (normalmente `intact`). Se a coluna campeã não estiver')
+        print('caindo em `intact` na tabela acima, ajuste --class-offset:')
+        print('  --class-offset 0  -> coluna extra fica no FIM   (col 0 = broken)')
+        print('  --class-offset 1  -> coluna extra fica na FRENTE (col 1 = broken)')
+        return
     print(f'fonte: {fonte} | q sai · c zera · p pausa')
 
     votos = defaultdict(Counter)
