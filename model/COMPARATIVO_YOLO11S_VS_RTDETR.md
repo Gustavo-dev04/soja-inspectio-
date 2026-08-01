@@ -345,8 +345,29 @@ Vale registrar porque quase levaram a descartar o RF-DETR por engano:
 
 | Papel | Modelo | Status |
 |---|---|---|
-| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT4 (fonte por classe)** | campeão da família RF-DETR; export ONNX pronto (`soja_rfdetr_small_CAMPEAO.onnx`) |
+| **Edge (Jetson Orin Nano) — VALIDADO** | **RF-DETR Small — FT4 (fonte por classe)** | **53,2 qps medidos no aparelho** (TensorRT FP16) — cabe em tempo real |
 | Segunda opinião | RF-DETR Small — FT3 (replay) | bom, mas ainda confundia `immature` × `intact` |
+
+### Medição no Jetson Orin Nano (a pergunta que motivou o experimento)
+
+JetPack L4T r39.2 / CUDA 13.2, engine TensorRT **FP16**, `nvpmodel -m 0` +
+`jetson_clocks`, 100 iterações via `trtexec` (`jetson/bench_trt.sh`):
+
+| métrica | valor |
+|---|---|
+| **Throughput** | **53,2 qps** |
+| GPU Compute (mean) | 18,68 ms |
+| GPU Compute (median / p99) | 18,13 / 22,57 ms |
+| Engine em disco | 59 MB |
+
+**Conclusão: o RF-DETR Small roda em tempo real no Orin Nano com folga.** O app
+real fica abaixo disso (decodificar vídeo, rastrear e desenhar custam à parte),
+mas mesmo caindo pela metade sobra sobre os 15-30 fps que o veredito travado por
+grão precisa. **Não** foi preciso INT8, nem cair pro RF-DETR Nano, nem DeepStream.
+
+Nota de método: a estimativa prévia era ~35-40 qps, extrapolada dos 151 fps do
+AGX Orin pela razão de TOPS (~275 vs ~67). O medido veio **acima** — escalar
+performance por TOPS subestima; vale medir em vez de extrapolar.
 | Pendente | Engine TensorRT no Jetson físico | `.engine` precisa ser gerado no próprio aparelho; fps do `trtexec` decide se entra em produção |
 | Comparação pendente | RF-DETR Small (FT3) vs YOLO11n/s destilado do 11x | mesmo vídeo, mesmo pipeline — quem for melhor em qualidade E rodar em tempo real no Orin Nano vence |
 

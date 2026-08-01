@@ -59,24 +59,34 @@ O script:
    o mais rápido)
 3. Mede 100 iterações e imprime throughput + latência
 
-### Como ler o resultado
+### ✅ Resultado medido (Orin Nano, JetPack L4T r39.2 / CUDA 13.2, FP16)
 
-O `Throughput` em **qps** é o que o **modelo** aguenta sozinho. O app real fica
-abaixo disso, porque decodificar vídeo, rastrear e desenhar custam à parte.
+```
+Throughput      : 53,2 qps
+GPU Compute Time: mean 18,68 ms  |  median 18,13  |  p99 22,57
+engine          : 59 MB
+```
+
+**O RF-DETR Small cabe em tempo real no Orin Nano, com folga.** Não precisa de
+INT8, nem cair pro Nano, nem DeepStream.
+
+Nota de método: a expectativa prévia era ~35-40 qps, extrapolando dos 151 fps do
+**AGX Orin** pela razão de TOPS (~275 contra ~67). O real veio **acima** —
+escalar por TOPS subestima, fica o registro pra próximas contas.
+
+### Como ler o `Throughput`
+
+É o que o **modelo** aguenta sozinho. O app real fica abaixo, porque decodificar
+vídeo, rastrear e desenhar custam à parte.
 
 | throughput do modelo | leitura |
 |---|---|
-| **> 40 qps** | folga confortável — o app real deve passar de 20 fps |
-| **20-40 qps** | viável; o app fica em ~10-20 fps, suficiente pro veredito travado |
+| **> 40 qps** | folga confortável — app real deve passar de 20 fps ← **estamos aqui (53)** |
+| **20-40 qps** | viável; app em ~10-20 fps, suficiente pro veredito travado |
 | **10-20 qps** | apertado — tentar INT8 ou cair pro RF-DETR **Nano** (384px) |
-| **< 10 qps** | Small não serve pro Orin Nano; testar Nano ou voltar pro YOLO |
+| **< 10 qps** | Small não serve; testar Nano ou voltar pro YOLO |
 
-Referência pra calibrar expectativa: o RF-DETR Small em DeepStream num **AGX
-Orin** (chip bem maior, até 275 TOPS contra ~67 do Orin Nano) deu **151 fps
-FP16**. Escalando grosseiramente por TOPS, o Orin Nano cairia na faixa de
-~35-40 — mas isso é extrapolação, e é justamente por isso que se mede.
-
-## 4. Se o FP16 não bastar
+## 4. Se o FP16 não bastar (não foi o caso — só referência)
 
 Em ordem de custo:
 
