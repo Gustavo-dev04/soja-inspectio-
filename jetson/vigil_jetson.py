@@ -5,11 +5,12 @@ Equivalente do `deck/vigil_deck.py`, mas consumindo a engine TensorRT do
 RF-DETR em vez do .pt via ultralytics. Mesma regra de voto exigente por classe
 e veredito travado por grão, pra o comportamento ser idêntico ao do Deck.
 
-    python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine
-    python3 vigil_jetson.py --camera http://192.168.15.8:4747/video   # DroidCam
-    python3 vigil_jetson.py --camera 0                                # webcam/USB
-    python3 vigil_jetson.py --camera csi                              # câmera CSI
-    python3 vigil_jetson.py --source video.mp4 --out saida.mp4        # arquivo
+    python3 vigil_jetson.py                            # celular (DroidCam, padrão)
+    python3 vigil_jetson.py --camera 0                 # webcam/USB
+    python3 vigil_jetson.py --camera csi               # câmera CSI (conector da placa)
+    python3 vigil_jetson.py --source video.mp4 --out saida.mp4   # arquivo
+
+O padrão é o celular via DroidCam — veja CAMERA_PADRAO logo abaixo se o IP mudar.
 
 Teclas: q sai · c zera a contagem · p pausa.
 
@@ -45,6 +46,11 @@ COLORS = {'intact': (90, 200, 90), 'immature': (60, 200, 200),
           'broken': (170, 100, 210), 'skin-damaged': (255, 160, 60),
           'spotted': (70, 70, 235)}
 RATIOS = {'broken': 0.85, 'skin-damaged': 0.80, 'spotted': 0.75, 'immature': 0.75}
+
+# Câmera padrão: o celular via DroidCam (o app mostra o IP na tela ao abrir).
+# Se o IP mudar — e ele muda quando o roteador renova o DHCP — troque aqui ou
+# passe --camera na linha de comando.
+CAMERA_PADRAO = 'http://192.168.15.5:4747/video'
 LOCK_MIN_FRAMES = 8    # frames rastreando antes de travar a classe
 MIN_DRAW_FRAMES = 3    # abaixo disso é ruído piscante: não desenha
 SMOOTH = 0.4           # EMA da caixa (menor = mais estável)
@@ -291,8 +297,9 @@ def rotate(frame, deg):
 def main():
     ap = argparse.ArgumentParser(description='Vígil.ia no Jetson (RF-DETR + TensorRT)')
     ap.add_argument('--engine', default='soja_rfdetr_small_CAMPEAO_fp16.engine')
-    ap.add_argument('--camera', default='0',
-                    help="índice (0), URL do DroidCam, ou 'csi'")
+    ap.add_argument('--camera', default=CAMERA_PADRAO,
+                    help=f"índice (0), URL do DroidCam, ou 'csi'. "
+                         f"padrão: {CAMERA_PADRAO}")
     ap.add_argument('--source', default=None, help='arquivo de vídeo (em vez da câmera)')
     ap.add_argument('--out', default=None, help='grava a saída anotada em .mp4')
     ap.add_argument('--conf', type=float, default=0.35)
@@ -310,7 +317,14 @@ def main():
     cap = (cv2.VideoCapture(args.source) if args.source
            else abrir_camera(args.camera))
     if not cap.isOpened():
-        sys.exit(f'não abri a fonte: {fonte}')
+        msg = [f'não abri a fonte: {fonte}']
+        if str(fonte).startswith('http'):
+            msg += ['  • o DroidCam está aberto no celular?',
+                    '  • o IP bate com o que o app mostra? (muda quando o roteador'
+                    ' renova o DHCP)',
+                    '  • Jetson e celular na MESMA rede Wi-Fi?',
+                    f'  • teste: curl -sI {fonte} | head -1']
+        sys.exit('\n'.join(msg))
     print(f'fonte: {fonte} | q sai · c zera · p pausa')
 
     votos = defaultdict(Counter)
