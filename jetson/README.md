@@ -153,6 +153,25 @@ Isso está alinhado com o uso real: inspeção de lote é multi-grão por defini
 exemplo), não "conserte" este modelo — ou treine um com mistura diferente, ou use
 o classificador do modo foto (YOLO11s-cls), que é feito pra isso.
 
+## ⚠️ Antes de julgar acurácia: padronize a captura
+
+O modelo foi treinado com fotos do **celular**. Se o rig do Jetson tem outra
+câmera, outra luz, outro fundo ou outra distância, você está medindo **noutro
+domínio** — e o número não se transfere. Domain shift é o gargalo estrutural
+deste projeto desde a era EfficientNet (29% → 64% → 91,7% só com fine-tune no
+domínio certo).
+
+Enquanto não houver padrão de captura, meça só o que independe de domínio: fps,
+latência, estabilidade de caixa e de tracking, integração. **Acurácia, recall por
+classe e calibragem de `RATIOS`/`conf` ficam para depois.**
+
+Pelo mesmo motivo, **não colete os grãos de `immature`/`spotted` ainda** — dado
+capturado antes da padronização nasce num domínio que vai ser descartado.
+
+O padrão precisa fixar: distância, fundo, enquadramento, câmera e **iluminação
+travada** — sem auto-exposição nem auto-white-balance mudando entre sessões, que
+é o jeito mais fácil de introduzir domain shift sem perceber.
+
 ## Limitação conhecida do modelo atual
 
 O FT4 tem `broken` (AP 0,86), `intact` (0,81) e `skin-damaged` (0,67) sólidos,

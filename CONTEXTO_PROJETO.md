@@ -345,12 +345,41 @@ capturas, sem nenhum replay do estágio anterior, apaga o que já tinha sido
 aprendido. Histórico completo, incluindo bugs de medição no caminho (off-by-one
 de classe, tracker depreciado) em `model/COMPARATIVO_YOLO11S_VS_RTDETR.md` §11.
 
-**Pendente:** gerar o engine TensorRT **no Jetson físico** (o `.pt`/ONNX não
-diz o fps real — só o `trtexec` no aparelho decide), e comparar contra o
-YOLO11s/11n nesse hardware específico. Falta também um vídeo de lote
-propositalmente ruim (defeito conhecido) pra medir recall de defeito — o
-vídeo de teste atual é majoritariamente `intact`, o que não distingue
-"modelo bom" de "modelo viciado em dizer intacto".
+**Validado no aparelho:** engine TensorRT FP16 construída no Orin Nano roda a
+**53,2 qps** (18,7 ms de compute) — cabe em tempo real com folga, sem precisar
+de INT8, do RF-DETR Nano ou de DeepStream. App ao vivo funcionando
+(`jetson/vigil_jetson.py`), forte em multi-grão e fraco em grão solto, o que é
+consequência direta do dataset (91% das caixas vêm de cena densa) e está
+alinhado com o uso real.
+
+### ⚠️ Avaliação de acurácia está SUSPENSA até haver padrão de captura
+
+Decisão do dono, e é a leitura certa: o setup atual do Jetson é **outro domínio**
+em relação ao que treinou o modelo (câmera, luz, fundo e distância diferentes das
+capturas do celular). Medir "ele inspeciona bem?" agora produz número que não se
+transfere — o mesmo domain shift que é o gargalo estrutural do projeto desde a
+era EfficientNet (29% → 64% → 91,7%).
+
+Separação prática:
+
+| mensurável agora (independe de domínio) | só depois da padronização |
+|---|---|
+| fps, latência, uso de memória | acurácia, recall por classe |
+| estabilidade de caixa e de tracking | confusão entre classes |
+| integração (engine, câmera, app) | calibragem de `RATIOS` e `conf` |
+
+**Isso reordena o backlog.** Coletar os ~120 grãos de `immature` e `spotted`
+**não deve acontecer antes** da padronização: dado capturado no rig atual nasce
+num domínio que será descartado. O caminho crítico passou a ser **definir o
+padrão de inspeção/captura** — distância, fundo, iluminação travada (sem
+auto-exposição nem auto-white-balance variando entre sessões), câmera e
+enquadramento fixos. Com isso fechado, uma rodada de captura + fine-tune vira a
+última que importa, e aí os números de acurácia passam a significar algo.
+
+Continua valendo, para quando a padronização existir: gravar também um **vídeo de
+lote propositalmente ruim** (defeito conhecido), porque o vídeo de teste atual é
+majoritariamente `intact` e não distingue "modelo bom" de "modelo viciado em
+dizer intacto".
 
 ---
 
