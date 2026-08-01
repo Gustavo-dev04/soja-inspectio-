@@ -357,15 +357,36 @@ def main():
     fonte = args.source or args.camera
     cap = (cv2.VideoCapture(args.source) if args.source
            else abrir_camera(args.camera))
-    if not cap.isOpened():
-        msg = [f'não abri a fonte: {fonte}']
+    # isOpened() NÃO basta em stream de rede: o GStreamer abre um pipeline vazio
+    # e devolve True mesmo sem conexão. Só ler um frame de verdade comprova.
+    quadro0 = None
+    if cap.isOpened():
+        for _ in range(15):
+            ok, quadro0 = cap.read()
+            if ok and quadro0 is not None:
+                break
+            time.sleep(0.2)
+        else:
+            quadro0 = None
+    if quadro0 is None:
+        msg = [f'a fonte abriu mas não veio nenhum frame: {fonte}', '']
         if str(fonte).startswith('http'):
-            msg += ['  • o DroidCam está aberto no celular?',
-                    '  • o IP bate com o que o app mostra? (muda quando o roteador'
-                    ' renova o DHCP)',
-                    '  • Jetson e celular na MESMA rede Wi-Fi?',
-                    f'  • teste: curl -sI {fonte} | head -1']
+            ip = str(fonte).split('//')[-1].split(':')[0]
+            msg += ['  Parece rede. Confira, nesta ordem:',
+                    f'    1. o Jetson enxerga o celular?   ping -c2 {ip}',
+                    '    2. qual o IP do Jetson?           ip -4 addr | grep inet',
+                    '       (Jetson e celular precisam estar na MESMA faixa,',
+                    '        ex. ambos 192.168.15.x — Wi-Fi vs cabo costuma separar)',
+                    '    3. o DroidCam está aberto e mostrando esse IP na tela?',
+                    f'    4. o stream responde?             curl -sI {fonte} | head -1',
+                    '',
+                    '  Pra testar o resto do app sem depender da rede:',
+                    '    python3 vigil_jetson.py --source teste_soja.mp4 --out saida.mp4']
+        else:
+            msg += ['  Câmera local: veja os índices disponíveis com',
+                    '    ls /dev/video*']
         sys.exit('\n'.join(msg))
+    print(f'fonte OK: {quadro0.shape[1]}x{quadro0.shape[0]}')
     print(f'fonte: {fonte} | q sai · c zera · p pausa')
 
     votos = defaultdict(Counter)
