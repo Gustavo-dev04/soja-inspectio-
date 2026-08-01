@@ -78,9 +78,25 @@ class Cuda:
                 from cuda import cudart
                 self.rt, self.api = cudart, 'cuda-python'
             except ImportError:
-                sys.exit('preciso de pycuda ou cuda-python:\n'
-                         '  pip3 install pycuda\n'
-                         '  (ou: pip3 install cuda-python)')
+                sys.exit(
+                    'preciso de cuda-python OU pycuda pra alocar memória na GPU.\n'
+                    '\n'
+                    '  1) o pip existe?\n'
+                    '       sudo apt install -y python3-pip python3-dev\n'
+                    '\n'
+                    '  2) tente o cuda-python (wheel pronto, não compila):\n'
+                    '       pip3 install cuda-python\n'
+                    '\n'
+                    '  3) se der "externally-managed-environment" (Ubuntu novo):\n'
+                    '       pip3 install cuda-python --break-system-packages\n'
+                    '\n'
+                    '  4) plano B — pycuda COMPILA, precisa do nvcc no PATH:\n'
+                    '       export PATH=/usr/local/cuda/bin:$PATH\n'
+                    '       export CUDA_ROOT=/usr/local/cuda\n'
+                    '       pip3 install pycuda --break-system-packages\n'
+                    '\n'
+                    '  (num venv, crie com --system-site-packages: o tensorrt vem\n'
+                    '   do sistema, via JetPack, e não do pip)')
 
     def alloc(self, nbytes):
         if self.api == 'pycuda':

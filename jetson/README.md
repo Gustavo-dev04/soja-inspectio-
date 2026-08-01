@@ -102,6 +102,28 @@ Em ordem de custo:
    complexidade sem retorno. A Roboflow publicou parser pronto pro RF-DETR, então
    quando fizer sentido, a parte difícil já existe.
 
+## 4b. Dependências do app ao vivo
+
+O JetPack já traz TensorRT, CUDA e (normalmente) OpenCV. Falta só a ponte de
+memória CUDA pro Python:
+
+```bash
+sudo apt install -y python3-pip python3-dev
+pip3 install cuda-python          # wheel pronto, não compila
+```
+
+Se aparecer `externally-managed-environment` (Ubuntu novo), acrescente
+`--break-system-packages`. Plano B é o `pycuda`, mas ele **compila** e precisa do
+nvcc no PATH:
+
+```bash
+export PATH=/usr/local/cuda/bin:$PATH
+pip3 install pycuda --break-system-packages
+```
+
+⚠️ Se usar venv, crie com `--system-site-packages` — o `tensorrt` vem do JetPack
+(apt), não do pip, e um venv isolado não enxerga ele.
+
 ## 5. Depois da medição
 
 Com a engine validada, o próximo passo é o app de inferência ao vivo — o
