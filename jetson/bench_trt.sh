@@ -11,13 +11,48 @@ set -euo pipefail
 
 ONNX="${1:-soja_rfdetr_small_CAMPEAO.onnx}"
 PREC="${2:-fp16}"
-TRTEXEC=/usr/src/tensorrt/bin/trtexec
 ENGINE="${ONNX%.onnx}_${PREC}.engine"
+
+# ---- estamos mesmo no Jetson? (erro nº1: rodar o script no PC) -------------
+ARCH="$(uname -m)"
+if [ "$ARCH" != "aarch64" ]; then
+    echo "ERRO: este script roda DENTRO do Jetson, e aqui a arquitetura é '$ARCH'."
+    echo "      (Jetson = aarch64. x86_64 = seu PC.)"
+    echo
+    echo "      Copie os arquivos pro Jetson e rode lá:"
+    echo "        scp $ONNX bench_trt.sh usuario@IP_DO_JETSON:~/"
+    echo "        ssh usuario@IP_DO_JETSON"
+    echo "        chmod +x bench_trt.sh && ./bench_trt.sh $ONNX $PREC"
+    exit 1
+fi
 
 [ -f "$ONNX" ] || { echo "ERRO: não achei '$ONNX'."; \
   echo "      Exporte no Colab (célula 'Export ONNX') e copie pra cá."; exit 1; }
-[ -x "$TRTEXEC" ] || { echo "ERRO: trtexec não está em $TRTEXEC."; \
-  echo "      Confira se o JetPack está instalado: 'dpkg -l | grep tensorrt'"; exit 1; }
+
+# ---- acha o trtexec (o caminho muda entre versões de JetPack) --------------
+TRTEXEC=""
+for c in "$(command -v trtexec 2>/dev/null || true)" \
+         /usr/src/tensorrt/bin/trtexec \
+         /usr/local/tensorrt/bin/trtexec \
+         /opt/nvidia/tensorrt/bin/trtexec; do
+    [ -n "$c" ] && [ -x "$c" ] && { TRTEXEC="$c"; break; }
+done
+if [ -z "$TRTEXEC" ]; then
+    echo "procurando trtexec no sistema…"
+    TRTEXEC="$(find /usr /opt -name trtexec -type f -executable 2>/dev/null | head -1 || true)"
+fi
+if [ -z "$TRTEXEC" ]; then
+    echo "ERRO: não achei o trtexec neste Jetson."
+    echo
+    echo "  TensorRT instalado?"
+    dpkg -l 2>/dev/null | grep -i tensorrt | head -5 || echo "    (nenhum pacote tensorrt)"
+    echo
+    echo "  Instale o JetPack completo:"
+    echo "    sudo apt update && sudo apt install nvidia-jetpack"
+    echo "  (baixa alguns GB; TensorRT vem junto)"
+    exit 1
+fi
+echo "trtexec: $TRTEXEC"
 
 echo "=============================================="
 echo " 1. Energia no máximo (senão o número sai menor)"
