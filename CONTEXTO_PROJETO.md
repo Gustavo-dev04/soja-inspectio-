@@ -370,11 +370,34 @@ Separação prática:
 
 **Isso reordena o backlog.** Coletar os ~120 grãos de `immature` e `spotted`
 **não deve acontecer antes** da padronização: dado capturado no rig atual nasce
-num domínio que será descartado. O caminho crítico passou a ser **definir o
-padrão de inspeção/captura** — distância, fundo, iluminação travada (sem
-auto-exposição nem auto-white-balance variando entre sessões), câmera e
-enquadramento fixos. Com isso fechado, uma rodada de captura + fine-tune vira a
-última que importa, e aí os números de acurácia passam a significar algo.
+num domínio que será descartado.
+
+### ✅ O rig padrão foi definido (v1) — ver `jetson/PADRAO_CAPTURA.md`
+
+| Item | Escolha |
+|---|---|
+| Câmera | IMX219 — 8 MP, lente 120°, foco ajustável, CSI |
+| Resolução de trabalho | 1640×1232 @ 30 fps (modo binado, **FOV completo**) |
+| Iluminação | Ring light 6500 K |
+| Fundo | Cartolina preta fosca, câmara fechada |
+| Exposição / WB | **TRAVADOS** via `nvarguscamerasrc` (`aelock`, `awblock`, `wbmode=0`) |
+| Enquadramento | **Recorte quadrado central** (`--quadrado`) |
+
+Três decisões técnicas com motivo, que não devem ser desfeitas sem pensar:
+
+1. **AE/AWB travados** — em automático a câmera compensa sozinha entre sessões e
+   recria o domain shift que o rig existe pra eliminar. Nada falha; o dado só
+   fica inconsistente. É o modo mais silencioso de invalidar um dataset.
+2. **Recorte quadrado central** — a lente de 120° distorce as bordas (barril), e
+   o modelo come 512×512 quadrado. O recorte descarta a região distorcida *e*
+   elimina o letterbox, que gastava 25% da entrada em barra preta (medido).
+3. **1640×1232 e não 1080p** — os modos 1080p do IMX219 **recortam o sensor**,
+   mudando o enquadramento; o modo binado mantém o FOV completo.
+
+**Consequência a assumir:** este rig é um **domínio novo**. Os modelos atuais
+(FT4 e anteriores) vão degradar nele — esperado, não é defeito. Agora o caminho
+é: capturar dataset neste rig → re-treinar → recalibrar `RATIOS` e `conf`. Essa
+passa a ser a rodada de fine-tuning que realmente conta.
 
 Continua valendo, para quando a padronização existir: gravar também um **vídeo de
 lote propositalmente ruim** (defeito conhecido), porque o vídeo de teste atual é

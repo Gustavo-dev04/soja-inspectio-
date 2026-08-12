@@ -337,17 +337,60 @@ class IoUTracker:
 
 
 # ---------------------------------------------------------------- câmera
-def abrir_camera(spec, largura=1280, altura=720):
+# ---- câmera CSI (IMX219) do rig padronizado -------------------------------
+# 1640x1232 é o modo binado do IMX219: FOV COMPLETO a 30 fps. Os modos 1080p
+# recortam o sensor, ou seja, mudam o enquadramento — o que quebraria a
+# padronização entre sessões.
+CSI_LARGURA, CSI_ALTURA, CSI_FPS = 1640, 1232, 30
+
+# Exposição e balanço de branco TRAVADOS. Em automático a câmera compensa
+# sozinha entre sessões e recria o domain shift que o rig existe pra eliminar —
+# é o jeito mais silencioso de invalidar um dataset inteiro.
+# Ajuste EXPOSICAO_NS olhando o histograma no rig (ver jetson/PADRAO_CAPTURA.md).
+CSI_TRAVAS = {
+    'wbmode': 0,            # 0 = balanço de branco manual (desliga o automático)
+    'awblock': 'true',      # trava o AWB
+    'aelock': 'true',       # trava a exposição automática
+    'exposuretimerange': '"13000000 13000000"',   # ns — fixo, não faixa
+    'gainrange': '"1 1"',                          # ganho analógico fixo
+    'ispdigitalgainrange': '"1 1"',                # ganho digital fixo
+}
+
+
+def pipeline_csi(sensor=0, largura=CSI_LARGURA, altura=CSI_ALTURA, fps=CSI_FPS,
+                 travar=True):
+    travas = ' '.join(f'{k}={v}' for k, v in CSI_TRAVAS.items()) if travar else ''
+    return (f'nvarguscamerasrc sensor-id={sensor} {travas} ! '
+            f'video/x-raw(memory:NVMM),width={largura},height={altura},'
+            f'framerate={fps}/1 ! nvvidconv ! video/x-raw,format=BGRx ! '
+            f'videoconvert ! video/x-raw,format=BGR ! appsink drop=1 max-buffers=2')
+
+
+def abrir_camera(spec, largura=1280, altura=720, travar_csi=True):
     if spec == 'csi':
-        pipe = (f'nvarguscamerasrc ! video/x-raw(memory:NVMM),width={largura},'
-                f'height={altura},framerate=30/1 ! nvvidconv ! video/x-raw,'
-                f'format=BGRx ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1')
+        pipe = pipeline_csi(travar=travar_csi)
+        print(f'CSI (IMX219) {CSI_LARGURA}x{CSI_ALTURA}@{CSI_FPS} | '
+              f'AE/AWB {"TRAVADOS" if travar_csi else "AUTOMÁTICOS (não padronizado!)"}')
         return cv2.VideoCapture(pipe, cv2.CAP_GSTREAMER)
     cap = cv2.VideoCapture(int(spec) if spec.isdigit() else spec)
     if spec.isdigit():
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
     return cap
+
+
+def crop_quadrado(frame):
+    """Recorta o quadrado central.
+
+    Serve a dois propósitos de uma vez: descarta as bordas da grande angular de
+    120°, onde a distorção de barril é pior, e evita o letterbox — o modelo come
+    512x512 quadrado, então uma imagem 4:3 gastaria ~25% da entrada em barra
+    preta.
+    """
+    h, w = frame.shape[:2]
+    lado = min(h, w)
+    x, y = (w - lado) // 2, (h - lado) // 2
+    return frame[y:y + lado, x:x + lado]
 
 
 def rotate(frame, deg):
@@ -373,6 +416,12 @@ def main():
     ap.add_argument('--hold', type=float, default=3.0,
                     help='segundos observando o grão antes de travar a classe')
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270])
+    ap.add_argument('--quadrado', action='store_true',
+                    help='recorta o quadrado central (rig CSI: tira a distorção '
+                         'das bordas da 120° e evita o letterbox)')
+    ap.add_argument('--csi-sem-trava', action='store_true',
+                    help='CSI com AE/AWB automáticos — só para ajustar o rig, '
+                         'NUNCA para capturar dataset')
     ap.add_argument('--no-window', action='store_true', help='sem janela (só terminal/arquivo)')
     ap.add_argument('--class-offset', type=int, default=None,
                     help='desloca a leitura das colunas de classe (0 = extra no fim, '
@@ -387,7 +436,7 @@ def main():
 
     fonte = args.source or args.camera
     cap = (cv2.VideoCapture(args.source) if args.source
-           else abrir_camera(args.camera))
+           else abrir_camera(args.camera, travar_csi=not args.csi_sem_trava))
     # isOpened() NÃO basta em stream de rede: o GStreamer abre um pipeline vazio
     # e devolve True mesmo sem conexão. Só ler um frame de verdade comprova.
     quadro0 = None
@@ -395,6 +444,8 @@ def main():
         for _ in range(15):
             ok, quadro0 = cap.read()
             if ok and quadro0 is not None:
+                if args.quadrado:
+                    quadro0 = crop_quadrado(quadro0)
                 break
             time.sleep(0.2)
         else:
@@ -428,6 +479,8 @@ def main():
                 ok, frame = cap.read()
                 if not ok:
                     break
+            if args.quadrado:
+                frame = crop_quadrado(frame)
             if args.rotate:
                 frame = rotate(frame, args.rotate)
             modelo(frame)
@@ -457,6 +510,8 @@ def main():
                 if not ok:
                     print('fim da fonte.')
                     break
+                if args.quadrado:
+                    frame = crop_quadrado(frame)
                 if args.rotate:
                     frame = rotate(frame, args.rotate)
 
