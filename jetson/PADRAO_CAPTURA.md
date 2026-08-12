@@ -14,11 +14,71 @@
 
 | Item | Especificação |
 |---|---|
-| Câmera | **IMX219** — 8 MP, 3280×2464, lente 120°, foco ajustável, conector CSI |
-| Placa | Jetson Orin Nano (conector CSI da própria placa) |
-| Iluminação | **Ring light, 6500 K** |
+| Câmera | **IMX219** — 8 MP, 3280×2464, mount **M12/CS destacável** (lente trocável) |
+| Cabo | **CSI 22-pin** nativo, pitch 0,5 mm — o Orin Nano usa 22-pin (o Jetson Nano antigo usava 15-pin; é a origem da confusão em anúncios genéricos) |
+| Lente | M12, foco manual ajustável, **FOV ~120°** — ver §1b, provavelmente precisa trocar |
+| Distância de trabalho | **15 cm** (faixa avaliada: 10-30 cm) |
+| Iluminação | Ring light LED, 144 LEDs, **6500-7000 K**, ~12000 lux, 5 W, **USB DC 5 V**, diâmetro interno ajustável 30-61 mm |
 | Fundo | **Cartolina preta fosca** (não reflexiva) |
 | Câmara | Fechada — sem luz ambiente entrando |
+
+Decisões já fechadas e o porquê (não reabrir sem motivo novo):
+
+- **RGB com filtro IR-cut, não NoIR.** A NoIR foi cogitada e descartada: sem o
+  corte de IR a cor fica distorcida (tom rosado/roxo), e **cor é sinal relevante**
+  para classificar dano no grão. NIR "de verdade" fica a cargo do sensor
+  espectral dedicado (AS7265x), não de uma câmera sem filtro.
+- **Ring light USB 5 V**, e não AC ou 12 V: casa com a tensão da Jetson e permite
+  liga/desliga por MOSFET de nível lógico, sem isolamento de alta tensão.
+- **6500-7000 K** deliberado: branco neutro/frio para fidelidade de cor. LED mais
+  quente amarelaria a leitura do grão.
+
+## 1b. ⚠️ A lente de 120° provavelmente é larga demais — conferir antes do flange
+
+Com a distância fechada em 15 cm, dá para calcular o campo de visão
+(`python3 calcular_optica.py`). O resultado pede atenção:
+
+| | 120° @ 15 cm |
+|---|---|
+| Campo de visão | **415 × 312 mm** |
+| Grão de 7 mm na captura (1640×1232) | 28 px |
+| **Grão na entrada do modelo (512×512)** | **11 px** |
+| Grãos que caberiam no quadro | ~1000 |
+
+O modelo foi treinado com grãos de **48-120 px** na entrada (60-150 px num canvas
+de 640, nas cenas sintéticas). A 11 px, o grão chega **~4× menor** do que ele
+aprendeu — e a textura que separa `spotted` de `skin-damaged` não sobrevive a
+essa escala.
+
+**O mount M12 destacável resolve** — trocando só a lente, mantendo os 15 cm:
+
+| FOV diagonal | focal | campo útil | grão no modelo | grãos/quadro |
+|---|---|---|---|---|
+| 120° (atual) | 1,3 mm | 312 mm | 11 px | ~1000 |
+| 60° | 4,0 mm | 104 mm | 34 px | 112 |
+| 45° | 5,5 mm | 75 mm | 48 px | 58 |
+| **~30°** | **~8,6 mm** | **48 mm** | **74 px** | **24** |
+| 20° | 13 mm | 32 mm | 113 px | 10 |
+
+**~30° (lente M12 de ~8 mm) é a mais bem casada:** 74 px por grão fica no meio do
+alvo, e ~24 grãos por quadro bate com a faixa das cenas de treino (6-25).
+
+> O raciocínio original — 120° em vez de 160° para controlar distorção — está
+> certo na direção. Só que, nesta distância, o eixo que mais pesa não é
+> distorção, é **densidade de pixel por grão**.
+
+### Antes de comprar lente ou imprimir o flange: confira com uma régua
+
+A conta assume FOV **diagonal**; se os 120° forem horizontais, o campo é ainda
+maior. E spec de lente M12 barata é aproximada. O teste empírico decide:
+
+```bash
+# régua no fundo, na distância de trabalho
+python3 vigil_jetson.py --camera csi --quadrado --csi-sem-trava
+```
+
+Conte quantos mm cabem na largura do quadro. ~300 mm confirma a conta (troque a
+lente); ~50 mm significa que o spec era outro e está tudo certo.
 
 ## 2. Configuração da câmera — o item mais crítico
 
@@ -131,3 +191,28 @@ modelos atuais. Portanto:
 
 Até lá, meça apenas o que independe de domínio: fps, latência, estabilidade de
 caixa e de rastreamento.
+
+## 8. Pendências de montagem física
+
+- [ ] **Confirmar a óptica com a régua** (§1b) — antes de tudo, porque define a lente
+- [ ] Definir/imprimir a **flange 3D** acoplando ring light + lente + parede da
+      câmara, mantendo alinhamento no eixo óptico e a distância fixa de 15 cm
+- [ ] Conferir a **orientação do cabo CSI 22-pin** na instalação — os contatos
+      podem precisar de inversão de lado dependendo do cabo; é erro comum
+- [ ] Travar o foco fisicamente depois de ajustado
+- [ ] Preencher a ficha do rig (§6)
+
+## 9. Futuro: canal NIR (não fechado)
+
+Planejado, fora do escopo do rig v1:
+
+- Sensor **AS7265x** (SparkFun), 410-940 nm em 18 canais
+- LED NIR cobrindo **~660-940 nm**. *(Um LED de 1000 nm chegou a ser sugerido e
+  foi descartado: fica na borda extrema da faixa útil — os canais NIR relevantes
+  do AS72651/AS72652 ficam entre 610-860 nm.)*
+- **RGB e NIR não devem acender juntos**: pulsar via GPIO/MOSFET, um de cada vez,
+  para evitar contaminação cruzada entre imagem e leitura espectral. A câmera RGB
+  tem IR-cut de fábrica e não deveria ser afetada, mas pulsar segue recomendado.
+
+Quando o NIR entrar, ele **muda o rig** — logo, vira padrão **v2** e exige
+recaptura. Não misture dataset v1 com v2.
