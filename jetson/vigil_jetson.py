@@ -343,6 +343,21 @@ class IoUTracker:
 # padronização entre sessões.
 CSI_LARGURA, CSI_ALTURA, CSI_FPS = 1640, 1232, 30
 
+# Modo ROI: sensor CHEIO (3280x2464 @ 21 fps) para recortar uma janela central
+# em escala 1:1, sem reduzir. É o que faz a lente de 120° render neste projeto.
+#
+# O problema nunca foi o sensor, foi o DOWNSCALE: reduzir o quadro inteiro de
+# 1640 para 512 deixa o grão com ~11 px, contra os 48-120 px em que o modelo foi
+# treinado. Recortando 512x512 do centro do sensor cheio, o grão fica com ~55 px
+# — sem reescalar nada, e usando justamente a região onde a 120° distorce menos.
+#
+#   campo 415 mm em 3280 px  ->  7,9 px/mm
+#   recorte de 512 px        ->  65 mm de janela útil
+#   grão de 7 mm             ->  ~55 px  (dentro do alvo)
+#
+# Confira o px/mm real com a régua e ajuste --roi se necessário.
+CSI_ROI_LARGURA, CSI_ROI_ALTURA, CSI_ROI_FPS = 3280, 2464, 21
+
 # Exposição e balanço de branco TRAVADOS. Em automático a câmera compensa
 # sozinha entre sessões e recria o domain shift que o rig existe pra eliminar —
 # é o jeito mais silencioso de invalidar um dataset inteiro.
@@ -366,17 +381,36 @@ def pipeline_csi(sensor=0, largura=CSI_LARGURA, altura=CSI_ALTURA, fps=CSI_FPS,
             f'videoconvert ! video/x-raw,format=BGR ! appsink drop=1 max-buffers=2')
 
 
-def abrir_camera(spec, largura=1280, altura=720, travar_csi=True):
+def abrir_camera(spec, largura=1280, altura=720, travar_csi=True, roi=0):
     if spec == 'csi':
-        pipe = pipeline_csi(travar=travar_csi)
-        print(f'CSI (IMX219) {CSI_LARGURA}x{CSI_ALTURA}@{CSI_FPS} | '
-              f'AE/AWB {"TRAVADOS" if travar_csi else "AUTOMÁTICOS (não padronizado!)"}')
+        if roi:   # sensor cheio: a janela vem do recorte, não do downscale
+            pipe = pipeline_csi(largura=CSI_ROI_LARGURA, altura=CSI_ROI_ALTURA,
+                                fps=CSI_ROI_FPS, travar=travar_csi)
+            print(f'CSI (IMX219) {CSI_ROI_LARGURA}x{CSI_ROI_ALTURA}@{CSI_ROI_FPS} '
+                  f'-> ROI central {roi}x{roi} (1:1, sem reescalar)')
+        else:
+            pipe = pipeline_csi(travar=travar_csi)
+            print(f'CSI (IMX219) {CSI_LARGURA}x{CSI_ALTURA}@{CSI_FPS} (binado)')
+        print(f'  AE/AWB {"TRAVADOS" if travar_csi else "AUTOMÁTICOS (não padronizado!)"}')
         return cv2.VideoCapture(pipe, cv2.CAP_GSTREAMER)
     cap = cv2.VideoCapture(int(spec) if spec.isdigit() else spec)
     if spec.isdigit():
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
     return cap
+
+
+def crop_roi(frame, lado):
+    """Recorta uma janela quadrada de `lado` px no centro, SEM reescalar.
+
+    Diferente do crop_quadrado (que pega o maior quadrado possível e depois é
+    reduzido), aqui o recorte já sai no tamanho da entrada do modelo. É o que
+    preserva a densidade de pixel por grão com lente grande angular.
+    """
+    h, w = frame.shape[:2]
+    lado = min(lado, h, w)
+    x, y = (w - lado) // 2, (h - lado) // 2
+    return frame[y:y + lado, x:x + lado]
 
 
 def crop_quadrado(frame):
@@ -416,6 +450,9 @@ def main():
     ap.add_argument('--hold', type=float, default=3.0,
                     help='segundos observando o grão antes de travar a classe')
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270])
+    ap.add_argument('--roi', type=int, default=0, metavar='PX',
+                    help='captura no sensor CHEIO e recorta PX x PX do centro, '
+                         'sem reescalar (rig CSI: use 512 — ver PADRAO_CAPTURA.md §1c)')
     ap.add_argument('--quadrado', action='store_true',
                     help='recorta o quadrado central (rig CSI: tira a distorção '
                          'das bordas da 120° e evita o letterbox)')
@@ -436,7 +473,8 @@ def main():
 
     fonte = args.source or args.camera
     cap = (cv2.VideoCapture(args.source) if args.source
-           else abrir_camera(args.camera, travar_csi=not args.csi_sem_trava))
+           else abrir_camera(args.camera, travar_csi=not args.csi_sem_trava,
+                            roi=args.roi))
     # isOpened() NÃO basta em stream de rede: o GStreamer abre um pipeline vazio
     # e devolve True mesmo sem conexão. Só ler um frame de verdade comprova.
     quadro0 = None
@@ -444,7 +482,9 @@ def main():
         for _ in range(15):
             ok, quadro0 = cap.read()
             if ok and quadro0 is not None:
-                if args.quadrado:
+                if args.roi:
+                    quadro0 = crop_roi(quadro0, args.roi)
+                elif args.quadrado:
                     quadro0 = crop_quadrado(quadro0)
                 break
             time.sleep(0.2)
@@ -479,7 +519,9 @@ def main():
                 ok, frame = cap.read()
                 if not ok:
                     break
-            if args.quadrado:
+            if args.roi:
+                frame = crop_roi(frame, args.roi)
+            elif args.quadrado:
                 frame = crop_quadrado(frame)
             if args.rotate:
                 frame = rotate(frame, args.rotate)
@@ -510,7 +552,9 @@ def main():
                 if not ok:
                     print('fim da fonte.')
                     break
-                if args.quadrado:
+                if args.roi:
+                    frame = crop_roi(frame, args.roi)
+                elif args.quadrado:
                     frame = crop_quadrado(frame)
                 if args.rotate:
                     frame = rotate(frame, args.rotate)

@@ -67,18 +67,56 @@ alvo, e ~24 grãos por quadro bate com a faixa das cenas de treino (6-25).
 > certo na direção. Só que, nesta distância, o eixo que mais pesa não é
 > distorção, é **densidade de pixel por grão**.
 
-### Antes de comprar lente ou imprimir o flange: confira com uma régua
+## 1c. ✅ Como fazer a 120° render sem trocar lente: **ROI no sensor cheio**
 
-A conta assume FOV **diagonal**; se os 120° forem horizontais, o campo é ainda
-maior. E spec de lente M12 barata é aproximada. O teste empírico decide:
+Como o hardware já está comprado, a solução é por software — e é melhor do que
+parece. **O problema nunca foi o sensor, foi o *downscale*.**
 
-```bash
-# régua no fundo, na distância de trabalho
-python3 vigil_jetson.py --camera csi --quadrado --csi-sem-trava
+Reduzir o quadro inteiro de 1640 px para os 512 px do modelo é o que espreme o
+grão até 11 px. Mas o IMX219 tem 3280×2464:
+
+```
+campo 415 mm em 3280 px            ->  7,9 px/mm
+recorte de 512×512 no centro       ->  janela de 65 × 65 mm
+grão de 7 mm                       ->  ~55 px   (DENTRO do alvo 48-120)
 ```
 
-Conte quantos mm cabem na largura do quadro. ~300 mm confirma a conta (troque a
-lente); ~50 mm significa que o spec era outro e está tudo certo.
+Recortando 512×512 direto do centro do sensor cheio, **em escala 1:1 e sem
+reescalar nada**, o grão chega ao modelo do tamanho certo. E o centro é
+justamente onde a lente de 120° distorce menos — o recorte resolve escala e
+distorção de uma vez.
+
+```bash
+python3 vigil_jetson.py --camera csi --roi 512
+```
+
+| | binado + downscale | **ROI no sensor cheio** |
+|---|---|---|
+| Captura | 1640×1232 @30 fps | 3280×2464 @21 fps |
+| Janela útil | 312 mm | **65 mm** |
+| Grão no modelo | 11 px | **~55 px** |
+| Reescala | 1232 → 512 (perde detalhe) | **nenhuma (1:1)** |
+| Grãos por quadro | ~1000 (inútil) | **~40** |
+
+**O custo:** a janela de inspeção passa a ser 65 × 65 mm, e usa-se ~2% dos
+pixels do sensor. Para bancada é ótimo (~40 grãos por quadro bate com as cenas
+de treino de 6-25); para vazão, move-se a bandeja.
+
+> Trocar a lente para ~30° continua sendo a solução *mais limpa* — usaria o
+> sensor inteiro para a mesma janela. Mas com o ROI o rig atual **já funciona**,
+> sem comprar nada.
+
+### Calibre com a régua antes de fechar o valor do ROI
+
+Os 7,9 px/mm vêm da conta, que assume FOV **diagonal**; se os 120° forem
+horizontais o campo é maior, e spec de M12 barata é aproximada. A medição decide:
+
+```bash
+python3 calibrar_rig.py            # régua no fundo, na distância de trabalho
+```
+
+Ele mede px/mm (clicando em dois pontos da régua), analisa a exposição
+(estouro, fundo cravado) e **diz qual `--roi` usar**.
 
 ## 2. Configuração da câmera — o item mais crítico
 
@@ -103,8 +141,8 @@ CSI_TRAVAS = {
 
 ### Como calibrar a exposição (uma vez, e anotar)
 
-1. Rode com o automático ligado só para achar o ponto:
-   `python3 vigil_jetson.py --camera csi --csi-sem-trava`
+1. Rode a calibração com o automático ligado, só para achar o ponto:
+   `python3 calibrar_rig.py --sem-trava`  (tecla **e** mostra o histograma)
 2. Ajuste o ring light e o `exposuretimerange` até que:
    - o **fundo** fique bem escuro, mas **não** cravado em 0
    - o **grão** fique bem exposto, **sem pixel estourado em 255**
@@ -133,7 +171,7 @@ de uma vez:
   gastaria ~25% da entrada em barra preta.
 
 ```bash
-python3 vigil_jetson.py --camera csi --quadrado
+python3 vigil_jetson.py --camera csi --roi 512     # modo do rig (ver §1c)
 ```
 
 ## 4. Geometria — o que precisa ficar fixo
@@ -159,7 +197,7 @@ python3 vigil_jetson.py --camera csi --quadrado
 
 ```bash
 # coleta (salva recorte + revisao.csv no formato do aprendizado_ativo.ipynb)
-python3 vigil_jetson.py --camera csi --quadrado --out sessao.mp4
+python3 vigil_jetson.py --camera csi --roi 512 --out sessao.mp4
 ```
 
 ## 6. Ficha do rig — PREENCHER e manter atualizada
@@ -168,6 +206,9 @@ python3 vigil_jetson.py --camera csi --quadrado --out sessao.mp4
 
 | Parâmetro | Valor | Data |
 |---|---|---|
+| **px/mm medido** (régua) | `_______` | |
+| **`--roi` em uso** | `_______` | |
+| Janela útil resultante | `_______ × _______ mm` | |
 | `exposuretimerange` | `_______` | |
 | `gainrange` | `_______` | |
 | Distância câmera → fundo | `_______ cm` | |
@@ -194,7 +235,7 @@ caixa e de rastreamento.
 
 ## 8. Pendências de montagem física
 
-- [ ] **Confirmar a óptica com a régua** (§1b) — antes de tudo, porque define a lente
+- [ ] **Calibrar com a régua** (`calibrar_rig.py`) — define o `--roi` e a exposição
 - [ ] Definir/imprimir a **flange 3D** acoplando ring light + lente + parede da
       câmara, mantendo alinhamento no eixo óptico e a distância fixa de 15 cm
 - [ ] Conferir a **orientação do cabo CSI 22-pin** na instalação — os contatos
