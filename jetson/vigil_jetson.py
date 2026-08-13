@@ -10,6 +10,17 @@ e veredito travado por grão, pra o comportamento ser idêntico ao do Deck.
     python3 vigil_jetson.py --camera csi               # câmera CSI (conector da placa)
     python3 vigil_jetson.py --source video.mp4 --out saida.mp4   # arquivo
 
+MODO RIG (câmara de inspeção com esteira — ver jetson/PADRAO_CAPTURA.md):
+
+    python3 vigil_jetson.py --camera csi --roi 704 --tiles 2 --esteira \\
+                            --laudo laudo.json
+
+`--tiles 2` divide a faixa de 100 mm em dois recortes 1:1 lado a lado, cobrindo
+a largura toda sem reescalar. `--esteira` liga a compensação de movimento no
+rastreamento e trava o veredito por contagem de varreduras, não por segundos.
+Dimensione antes com `calcular_vazao.py`, que diz a distância da câmera e a
+velocidade máxima da esteira para a configuração escolhida.
+
 O padrão é o celular via DroidCam — veja CAMERA_PADRAO logo abaixo se o IP mudar.
 
 Teclas: q sai · c zera a contagem · p pausa.
@@ -18,12 +29,14 @@ Dependências (além do JetPack): numpy, opencv, e pycuda OU cuda-python.
     sudo apt install python3-opencv
     pip3 install pycuda        # (ou: pip3 install cuda-python)
 
-Nota de projeto: o rastreamento é um IoU tracker próprio, de ~40 linhas, em vez
-de ByteTrack. Grão praticamente não se move entre quadros, então IoU basta — e
-evita uma dependência que já quebrou em silêncio antes (o sv.ByteTrack
-depreciado devolvia tracker_id vazio e zerava os votos sem erro nenhum).
+Nota de projeto: o rastreamento é um IoU tracker próprio, de ~100 linhas, em vez
+de ByteTrack — evita uma dependência que já quebrou em silêncio antes (o
+sv.ByteTrack depreciado devolvia tracker_id vazio e zerava os votos sem erro
+nenhum). Com o grão parado, IoU cru basta; na esteira não basta, e o porquê está
+no docstring do IoUTracker.
 """
 import argparse
+import json
 import sys
 import time
 from collections import Counter, defaultdict
@@ -54,6 +67,7 @@ CAMERA_PADRAO = 'http://192.168.15.5:4747/video'
 LOCK_MIN_FRAMES = 8    # frames rastreando antes de travar a classe
 MIN_DRAW_FRAMES = 3    # abaixo disso é ruído piscante: não desenha
 SMOOTH = 0.4           # EMA da caixa (menor = mais estável)
+MASSA_GRAO_G = 0.16    # peso de mil grãos 120-200 g -> massa estimada no laudo
 
 
 def veredito(cnt):
@@ -294,13 +308,44 @@ class RFDetrTRT:
 
 # ---------------------------------------------------------------- tracker
 class IoUTracker:
-    """Rastreio por IoU. Grão quase não se move entre quadros, então isso basta —
-    e não depende de biblioteca externa (o sv.ByteTrack depreciado já zerou
-    votos em silêncio uma vez)."""
+    """Rastreio por IoU, com predição de movimento opcional.
 
-    def __init__(self, iou_min=0.3, sumido_max=8):
+    Não depende de biblioteca externa (o sv.ByteTrack depreciado já zerou votos
+    em silêncio uma vez).
+
+    Com o grão PARADO, IoU cru basta. Com ele numa esteira, não: duas caixas de
+    7 mm deslocadas de d têm IoU 0,33 em d=3,5 mm e 0,27 em d=4 mm — ou seja, o
+    limite prático é ~0,54 grão por varredura. Passando disso o grão troca de ID
+    no meio da travessia, os votos zeram e a contagem infla, tudo em silêncio.
+    Ver `calcular_vazao.py`, que reporta esse limite em mm/s.
+
+    Por isso cada track guarda a própria velocidade (média móvel do
+    deslocamento do centro) e a caixa é PREVISTA antes de casar. É um preditor
+    de velocidade constante em 1ª ordem — o suficiente para esteira, que é
+    movimento uniforme, e barato o bastante para não pesar no laço.
+
+    Duas peças fazem isso funcionar de verdade, e sem elas a compensação não sai
+    do lugar:
+
+    * **Fluxo global.** Track recém-criado tem velocidade zero, então a primeira
+      previsão dele é a caixa parada — e o casamento falha logo no primeiro
+      passo, antes de aprender qualquer velocidade. Como numa esteira TODO grão
+      anda igual, o track novo nasce com a velocidade mediana da cena.
+    * **Porta por distância.** Quando a sobreposição zera (deslocamento perto de
+      um grão inteiro), IoU não distingue nada. Aí vale a distância entre o
+      centro previsto e o detectado: o grão anda ~0,5 grão por varredura,
+      enquanto o vizinho mais próximo está a ~1,4 grão. A porta separa os dois
+      com folga, e ainda cobre o arranque frio da primeira varredura.
+    """
+
+    def __init__(self, iou_min=0.3, sumido_max=8, compensar=True, inercia=0.6,
+                 porta=0.7):
         self.iou_min, self.sumido_max = iou_min, sumido_max
-        self.prox_id, self.tracks = 1, {}   # id -> [caixa, sumido_ha]
+        self.compensar, self.inercia, self.porta = compensar, inercia, porta
+        self.prox_id = 1
+        self.tracks = {}          # id -> [caixa, sumido_ha, (vx, vy)]
+        self.aposentados = []     # ids que sumiram de vez desde o último update
+        self.fluxo = (0.0, 0.0)   # velocidade mediana da cena (esteira)
 
     @staticmethod
     def _iou(a, b):
@@ -311,28 +356,80 @@ class IoUTracker:
         ua = (a[2]-a[0]) * (a[3]-a[1]) + (b[2]-b[0]) * (b[3]-b[1]) - inter
         return inter / ua if ua > 0 else 0.0
 
+    def _previsto(self, tid):
+        """Onde a caixa deve estar AGORA, dado onde estava e como se movia."""
+        caixa, sumido, (vx, vy) = self.tracks[tid]
+        if not self.compensar:
+            return caixa
+        # `sumido+1` porque a previsão é para a varredura atual: se o track
+        # ficou 2 varreduras sem aparecer, ele andou 3 passos desde a última vez.
+        k = sumido + 1
+        return (caixa[0] + vx * k, caixa[1] + vy * k,
+                caixa[2] + vx * k, caixa[3] + vy * k)
+
+    @staticmethod
+    def _centro(b):
+        return ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+
+    def _casa(self, caixa, usados):
+        """Melhor track para esta caixa: IoU primeiro, distância como reserva.
+
+        O score de distância é mantido abaixo de `iou_min` de propósito, para
+        que qualquer casamento por IoU sempre ganhe de um casamento por porta.
+        """
+        lado = ((caixa[2] - caixa[0]) + (caixa[3] - caixa[1])) / 2
+        limite = self.porta * lado
+        cx, cy = self._centro(caixa)
+        melhor, melhor_score = None, self.iou_min
+        reserva, reserva_d = None, limite
+        for tid in self.tracks:
+            if tid in usados:
+                continue
+            prev = self._previsto(tid)
+            v = self._iou(caixa, prev)
+            if v > melhor_score:
+                melhor, melhor_score = tid, v
+            elif self.compensar and melhor is None:
+                px, py = self._centro(prev)
+                d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+                if d < reserva_d:
+                    reserva, reserva_d = tid, d
+        return melhor if melhor is not None else reserva
+
     def update(self, dets):
-        saida, usados = [], set()
+        saida, usados, deslocs = [], set(), []
+        self.aposentados = []
         for det in dets:
             caixa = det[:4]
-            melhor, melhor_iou = None, self.iou_min
-            for tid, (prev, _) in self.tracks.items():
-                if tid in usados:
-                    continue
-                v = self._iou(caixa, prev)
-                if v > melhor_iou:
-                    melhor, melhor_iou = tid, v
+            melhor = self._casa(caixa, usados)
             if melhor is None:
                 melhor = self.prox_id
                 self.prox_id += 1
+                # nasce com a velocidade da cena: sem isso a primeira previsão
+                # é a caixa parada e o casamento falha antes de aprender nada
+                self.tracks[melhor] = [caixa, 0,
+                                       self.fluxo if self.compensar else (0.0, 0.0)]
+            else:
+                ant, sumido, (vx, vy) = self.tracks[melhor]
+                k = sumido + 1
+                ax, ay = self._centro(ant)
+                cx, cy = self._centro(caixa)
+                dx, dy = (cx - ax) / k, (cy - ay) / k
+                deslocs.append((dx, dy))
+                a = self.inercia
+                self.tracks[melhor] = [caixa, 0,
+                                       (a * vx + (1 - a) * dx, a * vy + (1 - a) * dy)]
             usados.add(melhor)
-            self.tracks[melhor] = [caixa, 0]
             saida.append((melhor, *det))
+        if deslocs:
+            self.fluxo = (float(np.median([d[0] for d in deslocs])),
+                          float(np.median([d[1] for d in deslocs])))
         for tid in list(self.tracks):
             if tid not in usados:
                 self.tracks[tid][1] += 1
                 if self.tracks[tid][1] > self.sumido_max:
                     del self.tracks[tid]
+                    self.aposentados.append(tid)
         return saida
 
 
@@ -343,19 +440,21 @@ class IoUTracker:
 # padronização entre sessões.
 CSI_LARGURA, CSI_ALTURA, CSI_FPS = 1640, 1232, 30
 
-# Modo ROI: sensor CHEIO (3280x2464 @ 21 fps) para recortar uma janela central
-# em escala 1:1, sem reduzir. É o que faz a lente de 120° render neste projeto.
+# Modo ROI: sensor CHEIO (3280x2464 @ 21 fps) para recortar janelas em escala
+# 1:1, sem reduzir. É o que faz a lente de 120° render neste projeto.
 #
 # O problema nunca foi o sensor, foi o DOWNSCALE: reduzir o quadro inteiro de
-# 1640 para 512 deixa o grão com ~11 px, contra os 48-120 px em que o modelo foi
-# treinado. Recortando 512x512 do centro do sensor cheio, o grão fica com ~55 px
-# — sem reescalar nada, e usando justamente a região onde a 120° distorce menos.
+# 1640 px até a entrada do modelo deixa o grão com ~16 px, contra os 60-150 px
+# em que o modelo é treinado. Recortando 1:1 do sensor cheio o grão chega no
+# tamanho certo — e usando justamente a região onde a 120° distorce menos.
 #
-#   campo 415 mm em 3280 px  ->  7,9 px/mm
-#   recorte de 512 px        ->  65 mm de janela útil
-#   grão de 7 mm             ->  ~55 px  (dentro do alvo)
+# Configuração do rig (câmara de 100 mm de faixa, câmera a ~8,4 cm):
+#   campo 233 mm em 3280 px   ->  14,1 px/mm
+#   2 recortes de 704 px      ->  2 x 50 mm = os 100 mm da faixa  (--tiles 2)
+#   grão de 7 mm              ->  ~99 px  (dentro do alvo 60-150)
 #
-# Confira o px/mm real com a régua e ajuste --roi se necessário.
+# Confira o px/mm real com a régua (calibrar_rig.py) e dimensione a vazão com
+# calcular_vazao.py antes de congelar a geometria.
 CSI_ROI_LARGURA, CSI_ROI_ALTURA, CSI_ROI_FPS = 3280, 2464, 21
 
 # Exposição e balanço de branco TRAVADOS. Em automático a câmera compensa
@@ -413,6 +512,44 @@ def crop_roi(frame, lado):
     return frame[y:y + lado, x:x + lado]
 
 
+def crop_tiles(frame, lado, n, sobrepor=0):
+    """Divide a faixa central em `n` recortes quadrados lado a lado.
+
+    Devolve [(recorte, dx, dy), …], onde (dx, dy) é o canto do recorte no frame
+    — é o que permite mapear as caixas de volta pra coordenadas globais e deixar
+    o tracker trabalhar num quadro só.
+
+    `sobrepor` (px) faz os recortes se cruzarem, pra grão em cima da costura não
+    ser cortado ao meio nos dois lados. Quem chama junta com NMS depois.
+    """
+    h, w = frame.shape[:2]
+    lado = min(lado, h)
+    passo = lado - sobrepor
+    total = passo * (n - 1) + lado
+    if total > w:                       # não cabe: reduz o nº de recortes
+        n = max(1, (w - lado) // passo + 1) if passo > 0 else 1
+        total = passo * (n - 1) + lado
+    x0, y0 = (w - total) // 2, (h - lado) // 2
+    return [(frame[y0:y0 + lado, x:x + lado], x, y0)
+            for x in (x0 + i * passo for i in range(n))]
+
+
+def nms_global(dets, iou_max=0.6):
+    """NMS agnóstico de classe sobre caixas já em coordenadas globais.
+
+    Só faz diferença na faixa de sobreposição entre recortes; sem isso o grão da
+    costura entra duas vezes e o laudo conta a mais.
+    """
+    if len(dets) < 2:
+        return dets
+    rects = [[d[0], d[1], d[2] - d[0], d[3] - d[1]] for d in dets]
+    scores = [float(d[5]) for d in dets]
+    idx = cv2.dnn.NMSBoxes(rects, scores, 0.0, iou_max)
+    if len(idx) == 0:
+        return dets
+    return [dets[i] for i in np.array(idx).ravel()]
+
+
 def crop_quadrado(frame):
     """Recorta o quadrado central.
 
@@ -437,6 +574,60 @@ def rotate(frame, deg):
     return frame
 
 
+def enquadrar(frame, args):
+    """Recorte + rotação, iguais em todos os caminhos (diag, 1º frame, laço)."""
+    if args.roi and args.tiles <= 1:
+        frame = crop_roi(frame, args.roi)
+    elif args.quadrado:
+        frame = crop_quadrado(frame)
+    if args.rotate:
+        frame = rotate(frame, args.rotate)
+    return frame
+
+
+def detectar(modelo, frame, args, sobrepor):
+    """Detecta no frame, em N recortes se pedido, sempre em coords globais."""
+    if args.tiles <= 1:
+        return modelo(frame)
+    lado = args.roi or modelo.W
+    dets = []
+    for tile, dx, dy in crop_tiles(frame, lado, args.tiles, sobrepor):
+        for x1, y1, x2, y2, ci, cf in modelo(tile):
+            dets.append((x1 + dx, y1 + dy, x2 + dx, y2 + dy, ci, cf))
+    return nms_global(dets)
+
+
+def escrever_laudo(caminho, contagem, t0, fps, args, extra=''):
+    """Laudo do lote: é o produto que o MVP entrega.
+
+    Gravado periodicamente para que uma jornada de 14-16 h não perca tudo se o
+    app cair no fim.
+    """
+    total = sum(contagem.values())
+    premium = contagem.get('intact', 0)
+    dur = time.time() - t0
+    laudo = {
+        'gerado_em': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'duracao_s': round(dur, 1),
+        'graos': total,
+        'premium': premium,
+        'nao_premium': total - premium,
+        'premium_pct': round(100 * premium / total, 2) if total else 0.0,
+        'por_classe': {k: contagem.get(k, 0) for k in NAMES},
+        'massa_estimada_kg': round(total * MASSA_GRAO_G / 1000, 4),
+        'vazao_kg_h': round(total * MASSA_GRAO_G / 1000 * 3600 / dur, 2) if dur > 0 else 0.0,
+        'graos_por_s': round(total / dur, 2) if dur > 0 else 0.0,
+        'fps': round(fps, 1),
+        'config': {'engine': args.engine, 'conf': args.conf, 'roi': args.roi,
+                   'tiles': args.tiles, 'esteira': bool(args.esteira),
+                   'massa_grao_g': MASSA_GRAO_G},
+        'obs': extra,
+    }
+    with open(caminho, 'w') as f:
+        json.dump(laudo, f, ensure_ascii=False, indent=2)
+    return laudo
+
+
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description='Vígil.ia no Jetson (RF-DETR + TensorRT)')
@@ -448,11 +639,25 @@ def main():
     ap.add_argument('--out', default=None, help='grava a saída anotada em .mp4')
     ap.add_argument('--conf', type=float, default=0.35)
     ap.add_argument('--hold', type=float, default=3.0,
-                    help='segundos observando o grão antes de travar a classe')
+                    help='segundos observando o grão antes de travar a classe '
+                         '(ignorado em --esteira)')
     ap.add_argument('--rotate', type=int, default=0, choices=[0, 90, 180, 270])
     ap.add_argument('--roi', type=int, default=0, metavar='PX',
                     help='captura no sensor CHEIO e recorta PX x PX do centro, '
-                         'sem reescalar (rig CSI: use 512 — ver PADRAO_CAPTURA.md §1c)')
+                         'sem reescalar (rig CSI: use 704 — ver PADRAO_CAPTURA.md §1c)')
+    ap.add_argument('--tiles', type=int, default=1, metavar='N',
+                    help='divide a faixa em N recortes de --roi px lado a lado, '
+                         'cobrindo mais largura sem reescalar (rig: 2)')
+    ap.add_argument('--esteira', action='store_true',
+                    help='grão em movimento: trava por contagem de varreduras '
+                         '(hold=0) e liga a compensação de movimento no tracker')
+    ap.add_argument('--parado', action='store_true',
+                    help='desliga a compensação de movimento (bandeja estática)')
+    ap.add_argument('--laudo', default=None, metavar='ARQ.json',
+                    help='grava o laudo (contagem, %% premium, massa) e o '
+                         'atualiza a cada --laudo-seg')
+    ap.add_argument('--laudo-seg', type=float, default=300,
+                    help='de quantos em quantos segundos regravar o laudo')
     ap.add_argument('--quadrado', action='store_true',
                     help='recorta o quadrado central (rig CSI: tira a distorção '
                          'das bordas da 120° e evita o letterbox)')
@@ -467,9 +672,18 @@ def main():
                     help='processa N frames, imprime qual coluna de classe dispara, e sai')
     args = ap.parse_args()
 
+    if args.esteira:
+        args.hold = 0.0
     print(f'carregando {args.engine} …')
     modelo = RFDetrTRT(args.engine, conf=args.conf, offset=args.class_offset)
-    tracker = IoUTracker()
+    tracker = IoUTracker(compensar=not args.parado)
+    # sobreposição entre recortes: precisa ser MAIOR que um grão, senão o grão da
+    # costura sai cortado nos dois lados. 20% de 704 px = 141 px; a ~12,7 px/mm
+    # do rig isso são 11 mm, ~1,6 grãos. Ver calcular_vazao.py --sobrepor.
+    sobrepor = int((args.roi or modelo.W) * 0.2) if args.tiles > 1 else 0
+    if args.tiles > 1:
+        print(f'recortes: {args.tiles} x {args.roi or modelo.W}px, '
+              f'sobreposição {sobrepor}px')
 
     fonte = args.source or args.camera
     cap = (cv2.VideoCapture(args.source) if args.source
@@ -482,10 +696,7 @@ def main():
         for _ in range(15):
             ok, quadro0 = cap.read()
             if ok and quadro0 is not None:
-                if args.roi:
-                    quadro0 = crop_roi(quadro0, args.roi)
-                elif args.quadrado:
-                    quadro0 = crop_quadrado(quadro0)
+                quadro0 = enquadrar(quadro0, args)
                 break
             time.sleep(0.2)
         else:
@@ -519,13 +730,7 @@ def main():
                 ok, frame = cap.read()
                 if not ok:
                     break
-            if args.roi:
-                frame = crop_roi(frame, args.roi)
-            elif args.quadrado:
-                frame = crop_quadrado(frame)
-            if args.rotate:
-                frame = rotate(frame, args.rotate)
-            modelo(frame)
+            detectar(modelo, enquadrar(frame, args), args, sobrepor)
         cap.release()
         print('\n=== onde as classes realmente estão ===')
         print(modelo.diagnostico_classes())
@@ -539,7 +744,13 @@ def main():
 
     votos = defaultdict(Counter)
     visto, primeiro, travado, suave = Counter(), {}, {}, {}
+    # Contagem ACUMULADA: numa jornada de 14-16 h passam ~3 milhões de grãos, e
+    # os dicionários acima são por track. Quando o track sai de quadro o verdito
+    # dele é dobrado aqui e as entradas são liberadas — senão a memória cresce
+    # linearmente com a produção do dia.
+    contagem = Counter()
     writer = None
+    t_inicio, prox_laudo = time.time(), time.time() + args.laudo_seg
     fps, t_prev, pausado = 0.0, time.time(), False
     win = 'Vigil.ia Jetson (q sai)'
     if not args.no_window:
@@ -552,15 +763,10 @@ def main():
                 if not ok:
                     print('fim da fonte.')
                     break
-                if args.roi:
-                    frame = crop_roi(frame, args.roi)
-                elif args.quadrado:
-                    frame = crop_quadrado(frame)
-                if args.rotate:
-                    frame = rotate(frame, args.rotate)
+                frame = enquadrar(frame, args)
 
                 t0 = time.time()
-                dets = modelo(frame)
+                dets = detectar(modelo, frame, args, sobrepor)
                 ms = (time.time() - t0) * 1000
                 agora = time.time()
 
@@ -589,11 +795,27 @@ def main():
                     cv2.putText(frame, rot, (x1, max(16, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, cor, 2)
 
+                # aposenta os tracks que saíram: dobra o verdito no acumulado e
+                # libera as entradas por track (ver `contagem`, acima)
+                for tid in tracker.aposentados:
+                    cls = travado.pop(tid, None)
+                    if cls is None and visto.get(tid, 0) >= MIN_DRAW_FRAMES and votos[tid]:
+                        cls = veredito(votos[tid])   # saiu antes de travar: usa o voto
+                    if cls:
+                        contagem[cls] += 1
+                    votos.pop(tid, None); visto.pop(tid, None)
+                    primeiro.pop(tid, None); suave.pop(tid, None)
+
                 now = time.time()
                 fps = 0.9 * fps + 0.1 * (1.0 / max(now - t_prev, 1e-6))
                 t_prev = now
 
-                dist = Counter(travado.values())
+                if args.laudo and now >= prox_laudo:
+                    escrever_laudo(args.laudo, contagem + Counter(travado.values()),
+                                   t_inicio, fps, args, 'parcial')
+                    prox_laudo = now + args.laudo_seg
+
+                dist = contagem + Counter(travado.values())
                 bons = dist.get('intact', 0)
                 ruins = sum(v for k, v in dist.items() if k != 'intact')
                 hud = (f'{len(dets)} graos  |  Premium {bons}  Expulso {ruins}  |  '
@@ -617,8 +839,9 @@ def main():
                     pausado = not pausado
                 if k == ord('c'):
                     votos.clear(); visto.clear(); primeiro.clear()
-                    travado.clear(); suave.clear()
-                    tracker = IoUTracker()
+                    travado.clear(); suave.clear(); contagem.clear()
+                    tracker = IoUTracker(compensar=not args.parado)
+                    t_inicio = time.time()
                     print('contagem zerada')
     finally:
         cap.release()
@@ -628,7 +851,7 @@ def main():
         if not args.no_window:
             cv2.destroyAllWindows()
 
-    dist = Counter(travado.values())
+    dist = contagem + Counter(travado.values())
     print('\n=== veredito final ===')
     for c in NAMES:
         print(f'  {PT_LABEL[c]:14s} {dist.get(c, 0)}')
@@ -636,6 +859,11 @@ def main():
     if total:
         print(f'  Premium: {dist.get("intact", 0)}/{total} '
               f'({100 * dist.get("intact", 0) / total:.0f}%)')
+    if args.laudo:
+        laudo = escrever_laudo(args.laudo, dist, t_inicio, fps, args, 'final')
+        print(f'\nlaudo: {args.laudo}')
+        print(f'  {laudo["graos"]} grãos, {laudo["premium_pct"]:.1f}% premium, '
+              f'~{laudo["massa_estimada_kg"]:.3f} kg, {laudo["vazao_kg_h"]:.1f} kg/h')
 
 
 if __name__ == '__main__':

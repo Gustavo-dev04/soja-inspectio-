@@ -97,10 +97,45 @@ Em ordem de custo:
    calibração a acurácia cai**. Se o ganho compensar, o caminho certo é
    Quantization-Aware Training (TAO Toolkit da Nvidia), que treina o modelo já
    sabendo que vai ser quantizado e perde bem menos.
+   ⚠️ **Não assuma que INT8 é mais rápido aqui.** Há relato no fórum da NVIDIA de
+   INT8 causando regressão de 2,7× num ViT-S no Orin Nano — e o backbone do
+   RF-DETR Large é exatamente um ViT-S (`dinov2_windowed_small`). A quantização
+   insere nós de reformat/dequant que podem dominar em transformer. Meça o A/B
+   contra o FP16 antes de trocar, e compare acurácia no conjunto anotado.
 3. **DeepStream** — só vale quando o gargalo for o pipeline de vídeo (decodificar,
    copiar CPU↔GPU) ou quando houver **várias câmeras**. Pra uma câmera só, é
    complexidade sem retorno. A Roboflow publicou parser pronto pro RF-DETR, então
    quando fizer sentido, a parte difícil já existe.
+
+## 4a. Modo rig: esteira, recortes e laudo
+
+Com a câmara de inspeção (100 mm de faixa, esteira, ver `PADRAO_CAPTURA.md`), o
+app roda assim:
+
+```bash
+python3 vigil_jetson.py --camera csi --roi 704 --tiles 2 --esteira \
+                        --laudo laudo.json
+```
+
+- `--tiles 2` divide a faixa em dois recortes 1:1 lado a lado (140 px de
+  sobreposição), cobrindo os 100 mm sem reescalar. Grão a ~89 px.
+- `--esteira` liga a **compensação de movimento** no rastreamento e trava o
+  veredito por contagem de varreduras. Sem ela, o grão troca de ID no meio da
+  travessia acima de 53 mm/s — abaixo da velocidade que a meta de vazão exige.
+- `--laudo` grava contagem, % premium, massa estimada e kg/h, atualizando a cada
+  5 min (`--laudo-seg`) para uma jornada de 14-16 h não perder tudo se cair.
+
+Dimensione antes, e confira depois com a régua:
+
+```bash
+python3 calcular_vazao.py --compensado      # distância, velocidade máx, kg/h
+python3 calibrar_rig.py                     # px/mm real e exposição
+python3 testar_esteira.py                   # roda no PC, sem Jetson nem câmera
+```
+
+`testar_esteira.py` exercita justamente o que não depende de GPU — rastreamento
+com movimento, junção dos recortes e contabilidade do laudo — e falha se algum
+dos limites documentados regredir.
 
 ## 4b. Dependências do app ao vivo
 
@@ -126,10 +161,10 @@ pip3 install pycuda --break-system-packages
 
 ## 5. Depois da medição
 
-Com a engine validada, o próximo passo é o app de inferência ao vivo — o
+Com a engine validada, o app de inferência ao vivo é o `vigil_jetson.py` — o
 equivalente do `deck/vigil_deck.py`, mas consumindo a `.engine` via TensorRT em
 vez do `.pt` via ultralytics, mantendo a mesma regra de **voto exigente por
-classe** e **veredito travado por grão**.
+classe** e **veredito travado por grão**. Para o rig com esteira, ver §4a.
 
 ---
 

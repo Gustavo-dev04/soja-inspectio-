@@ -457,6 +457,63 @@ e 10 mil+ grãos físicos disponíveis, a ordem é **calibrar o rig → capturar
 treinar a 704**. Trocar só a resolução entrega mais área com o mesmo erro de
 rótulo.
 
+### 5.5 O MVP: câmara de inspeção com movimento, 0,5 t/dia
+
+O escopo passou de "provar que o modelo reconhece as classes" para **MVP com
+viabilidade comercial em 6 meses**. O que está fixado:
+
+| Item | Valor |
+|---|---|
+| Câmara | 100 mm de faixa × 150 mm de curso, luz difusa, fundo preto |
+| Vazão alvo | 0,5 t/dia em 14-16 h = **~33 kg/h** = ~58 grãos/s |
+| Movimento | esteira (calha/queda livre mudariam o projeto — `PADRAO_CAPTURA.md` §7b) |
+| Entrega | **classificar + laudo**; separação física fica para a fase 2 |
+| Decisão de produto | **premium × não-premium** (as 5 classes são o meio) |
+| Referência de mercado | classificadora pequena de R$ 5.000-7.500 |
+
+**A conta que dimensiona tudo** (resolvida por `jetson/calcular_vazao.py`):
+`grãos/s = largura_mm × velocidade_mm/s ÷ 96 mm²`, com grão de 0,16 g. Numa faixa
+de 100 mm, a meta pede a esteira a **56 mm/s** — devagar. O que aperta não é a
+esteira nem o fps: é o **rastreamento**.
+
+**Descoberta que veio da conta, não de rodar:** o `IoUTracker` casava detecções
+por IoU puro, com o pressuposto (escrito no próprio docstring) de que "o grão
+quase não se move entre quadros". Duas caixas de 7 mm deslocadas de 4 mm têm IoU
+0,27, abaixo do mínimo de 0,30 — **o limite era 53 mm/s, abaixo dos 56 mm/s que a
+meta exige**. O grão trocaria de ID no meio da travessia, zerando os votos e
+inflando a contagem, sem erro nenhum aparecer. Mais dois problemas silenciosos no
+mesmo caminho: `--hold 3.0` impedia qualquer travamento (o grão fica 0,8 s em
+quadro), e os dicionários por track cresciam sem limite numa jornada de 3 milhões
+de grãos.
+
+Corrigido: tracker com **compensação de movimento** (previsão por velocidade,
+fluxo global para arrancar e porta por distância), modo `--esteira`, e
+aposentadoria de track dobrando o verdito em contadores acumulados. O novo limite
+é **69 mm/s → 41 kg/h**, folga de 1,23× sobre a meta — e é um limite *físico*
+(ambiguidade de abertura: acima de meio espaçamento o vizinho da frente fica mais
+perto do que o grão andou), não falta de código.
+
+**Geometria escolhida:** câmera a **9,3 cm**, **2 recortes de 704 px** lado a lado
+com 140 px de sobreposição, cobrindo os 100 mm da faixa em escala 1:1. Grão a
+**89 px**. Com 1 recorte a faixa só caberia a 15 cm, e o grão cairia para 55 px —
+metade do detalhe linear, justamente o que compra *recall* de defeito.
+
+### 5.6 Posição honesta de mercado
+
+0,5 t/dia em 15 h são **~33 kg/h**. Uma classificadora mecânica de R$ 5.000-7.500
+é especificada em **t/h** — uma a duas ordens de grandeza acima. **Não competimos
+em vazão**, e afirmar isso na documentação cairia no primeiro questionamento.
+
+O que diferencia: máquina mecânica separa por **tamanho, densidade e cor**; ela
+não sabe *qual* é o defeito. O Vígil.ia entrega **taxonomia de defeito por grão,
+com laudo auditável** — informação que aquela faixa de preço não produz. É por aí
+que o MVP se justifica.
+
+A escala é linear e previsível (`grãos/s = largura × velocidade ÷ 96 mm²`):
+chegar a 500 kg/h pediria ~15× mais largura imageada ou mais câmeras.
+Dimensionável com `calcular_vazao.py`, e um número honesto de colocar no
+relatório.
+
 ---
 
 ## 6. Dataset e estratégia de dados
@@ -711,11 +768,20 @@ Novas, da Era 3 (detecção/vídeo):
   gargalo, não o modelo; `--quality` mais baixo já ajuda)
 - Coleta de mais fotos reais pra validação robusta do modo foto (a validação
   atual de 91,7% é sobre só 12 fotos)
-- **Rodada do rig padronizado, nesta ordem** (§5.4): montar e calibrar o rig
-  (`jetson/calibrar_rig.py`, anotar px/mm na ficha do `PADRAO_CAPTURA.md` §6) →
-  capturar ~120 grãos únicos de `immature` e `spotted` no rig, conferindo o
-  rótulo grão a grão → treinar o RF-DETR Large a 704 (estágio 1 → FT1 → FT3 →
-  FT4) → gerar engine no Jetson e medir fps → recalibrar `RATIOS` e `conf`
+- **Rodada do rig padronizado, nesta ordem** (§5.4-5.5):
+  1. montar a câmara, fixar a distância em ~9,3 cm e **calibrar com a régua**
+     (`jetson/calibrar_rig.py`), conferindo os 12,7 px/mm antes de congelar nada;
+  2. definir o acionamento da esteira e **medir a velocidade real** — precisa
+     ficar abaixo de 69 mm/s (`jetson/calcular_vazao.py`);
+  3. capturar o dataset: **bandeja de classe única** (rótulo de graça via Otsu +
+     pasta = classe) para treino, **bandeja mista anotada à mão** para validação;
+  4. treinar do zero a 704 — **sem a cadeia FT1→FT4**, que existia para compensar
+     escassez que não existe mais: estágio 1 (base 12,5 k) → um fine-tuning só,
+     100 % rig. Testar antes se o estágio 1 ainda ajuda (COCO → FT-RIG direto);
+  5. gerar engine no Jetson, medir fps e a **curva de operação premium ×
+     não-premium**; daí saem os `RATIOS` calibrados, hoje valores na mão;
+  6. avaliar INT8 (**pode ficar mais lento em ViT** — A/B obrigatório) e fazer o
+     ensaio térmico de jornada longa (a medição de 53,2 qps foi em rajada, 15 W)
 
 ---
 
