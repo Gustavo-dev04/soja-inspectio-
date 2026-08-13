@@ -262,7 +262,7 @@ escasso" fica restrita ao regime de capacidade igual/menor.
 | Modo foto (produção, web) | YOLO11s-cls (`soja_yolo11s_finetuned.pt`) | no ar, intocado |
 | Vídeo / demo (GPU) | **YOLO11x_v3** (`soja_yolo11x_v3.pt`, com fine-tune multi-grão `soja_yolo11x_multi_v3.pt`) | campeão atual; servido via Colab+túnel |
 | Reserva / segunda opinião | RT-DETR-l ft_v3 | arquivado no Drive |
-| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR Small — FT4 (fonte de recorte por classe)** | ver §5.3; export ONNX pronto, falta engine TensorRT no aparelho |
+| **Candidato a edge (Jetson Orin Nano)** | **RF-DETR — FT4 (fonte de recorte por classe)**. Small/512 validado no aparelho (53,2 qps); migrando pra **Large/704** por vazão (§5.4) | ver §5.3-5.4; engine FP16 rodando no Orin Nano, app ao vivo funcionando |
 | Local / edge (futuro, CPU/iGPU) | YOLO11s ou 11m via destilação | professor da destilação passa a ser o YOLO11x |
 | Steam Deck (local, sem GPU) | `soja_yolo11n_base12k_v2.pt` (nano) | roda em CPU/iGPU, ~10-20 fps |
 
@@ -377,7 +377,7 @@ num domínio que será descartado.
 | Item | Escolha |
 |---|---|
 | Câmera | IMX219 — 8 MP, lente 120°, foco ajustável, CSI |
-| Resolução de trabalho | 1640×1232 @ 30 fps (modo binado, **FOV completo**) |
+| Resolução de trabalho | 3280×2464 @ 21 fps (sensor cheio, para o ROI 1:1) |
 | Iluminação | Ring light 6500 K |
 | Fundo | Cartolina preta fosca, câmara fechada |
 | Exposição / WB | **TRAVADOS** via `nvarguscamerasrc` (`aelock`, `awblock`, `wbmode=0`) |
@@ -389,10 +389,13 @@ Três decisões técnicas com motivo, que não devem ser desfeitas sem pensar:
    recria o domain shift que o rig existe pra eliminar. Nada falha; o dado só
    fica inconsistente. É o modo mais silencioso de invalidar um dataset.
 2. **Recorte quadrado central** — a lente de 120° distorce as bordas (barril), e
-   o modelo come 512×512 quadrado. O recorte descarta a região distorcida *e*
+   o modelo come uma entrada quadrada. O recorte descarta a região distorcida *e*
    elimina o letterbox, que gastava 25% da entrada em barra preta (medido).
-3. **1640×1232 e não 1080p** — os modos 1080p do IMX219 **recortam o sensor**,
-   mudando o enquadramento; o modo binado mantém o FOV completo.
+3. **ROI 1:1 no sensor cheio, não downscale** — a 120° e 15 cm o quadro inteiro
+   reduzido até a entrada espreme o grão para ~16 px, contra os 60-150 px do
+   treino. Recortando `--roi 704` no centro dos 3280×2464, **sem reescalar**, o
+   grão chega com ~55 px. Nunca usar os modos 1080p: eles **recortam o sensor** e
+   mudam o enquadramento entre sessões.
 
 **Consequência a assumir:** este rig é um **domínio novo**. Os modelos atuais
 (FT4 e anteriores) vão degradar nele — esperado, não é defeito. Agora o caminho
@@ -403,6 +406,56 @@ Continua valendo, para quando a padronização existir: gravar também um **víd
 lote propositalmente ruim** (defeito conhecido), porque o vídeo de teste atual é
 majoritariamente `intact` e não distingue "modelo bom" de "modelo viciado em
 dizer intacto".
+
+### 5.4 Subida de resolução: 512 → 704 (RF-DETR **Large**)
+
+Com 53,2 qps sobrando no Jetson, a pergunta natural foi treinar em resolução
+maior. A análise que decidiu o desenho:
+
+**No ROI 1:1, a entrada do modelo não controla o detalhe do grão — controla a
+área.** O grão em pixels é fixado pela óptica (7,9 px/mm × 7 mm ≈ 55 px), e o
+recorte não reescala nada. Subir de 512 para 704 não deixa o grão mais nítido;
+leva a janela útil de 65 mm para 89 mm, **~1,9× mais grãos por quadro**. Como o
+objetivo declarado é **vazão**, é a alavanca certa.
+
+Custo estimado: ~28 fps FP16 no Orin Nano (de 53,2) — ainda acima dos 21 fps que
+a câmera entrega no modo cheio. Ou seja, **a área sai de graça**. Medir com
+`jetson/bench_trt.sh` para confirmar.
+
+**Como chegar a 704 — e como NÃO chegar.** Não se passa `resolution=` custom: o
+caminho limpo é **trocar de variante**, porque o checkpoint pré-treinado de cada
+variante foi treinado *na resolução nativa dela* — o positional embedding casa
+exato, sem interpolação. N/S/M/L têm praticamente o mesmo tamanho (~30-34M
+params, todas Apache 2.0) e o que muda entre elas é a resolução nativa: Nano 384,
+Small 512, Medium 576, **Large 704**.
+
+A "Large" é literalmente *a Small a 704 px* — conferido no `rfdetr/config.py` da
+versão 1.9.2: `RFDETRLargeConfig` usa o mesmo encoder `dinov2_windowed_small` e o
+mesmo `patch_size=16` / `num_windows=2` da Small, mudando só `resolution` (512 →
+704) e `dec_layers` (3 → 4). Não confundir com a **`RFDETRLargeDeprecated`**, que
+é outra classe (560 px, patch 14) — instanciar a errada era o risco do
+roboflow/rf-detr#960. Na 1.9.2 esse issue já está corrigido (há
+`interpolate_position_embeddings` e `_sync_pe_with_resolution`), mas a instalação
+está pinada em `rfdetr[train,loggers]>=1.9` justamente para não depender disso.
+
+Mudanças que isso exigiu no `model/treino_rfdetr_small_completo.ipynb`:
+
+- `VARIANTE = 'large'`, `RES` derivado da variante, e `SIZE = RES` — o canvas do
+  dataset sintético passa a ser igual à entrada, sem reescala intermediária;
+- **a resolução entrou nos caminhos dos checkpoints** (`_P = …_{VARIANTE}_{SIZE}`).
+  Cada estágio tem guarda "pula se o arquivo existe": sem o sufixo, rodar em
+  resolução nova reaproveitaria em silêncio um `.pth` treinado em 512 e pularia o
+  retreino inteiro — o experimento sairia inválido sem nenhum erro;
+- a contagem de grãos por cena sintética passou a escalar com a **área**
+  (antes fixa em 6-25), senão a cena de 704 fica esparsa justamente no eixo que
+  se quer treinar.
+
+**O que a resolução NÃO resolve.** O gargalo de acurácia continua sendo domain
+shift + rótulo ruim: o `immature` do FT1 está sistematicamente errado (as fotos
+não são de grãos imaturos) e `spotted` tem poucos exemplos. Com o rig padronizado
+e 10 mil+ grãos físicos disponíveis, a ordem é **calibrar o rig → capturar →
+treinar a 704**. Trocar só a resolução entrega mais área com o mesmo erro de
+rótulo.
 
 ---
 
@@ -658,6 +711,11 @@ Novas, da Era 3 (detecção/vídeo):
   gargalo, não o modelo; `--quality` mais baixo já ajuda)
 - Coleta de mais fotos reais pra validação robusta do modo foto (a validação
   atual de 91,7% é sobre só 12 fotos)
+- **Rodada do rig padronizado, nesta ordem** (§5.4): montar e calibrar o rig
+  (`jetson/calibrar_rig.py`, anotar px/mm na ficha do `PADRAO_CAPTURA.md` §6) →
+  capturar ~120 grãos únicos de `immature` e `spotted` no rig, conferindo o
+  rótulo grão a grão → treinar o RF-DETR Large a 704 (estágio 1 → FT1 → FT3 →
+  FT4) → gerar engine no Jetson e medir fps → recalibrar `RATIOS` e `conf`
 
 ---
 

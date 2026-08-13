@@ -42,26 +42,25 @@ Com a distância fechada em 15 cm, dá para calcular o campo de visão
 |---|---|
 | Campo de visão | **415 × 312 mm** |
 | Grão de 7 mm na captura (1640×1232) | 28 px |
-| **Grão na entrada do modelo (512×512)** | **11 px** |
+| **Grão na entrada do modelo (704×704)** | **16 px** |
 | Grãos que caberiam no quadro | ~1000 |
 
-O modelo foi treinado com grãos de **48-120 px** na entrada (60-150 px num canvas
-de 640, nas cenas sintéticas). A 11 px, o grão chega **~4× menor** do que ele
-aprendeu — e a textura que separa `spotted` de `skin-damaged` não sobrevive a
-essa escala.
+O modelo é treinado com grãos de **60-150 px** na entrada (o canvas das cenas
+sintéticas é igual à entrada do modelo — ver `SIZE = RES` no notebook). A 16 px,
+o grão chega **~4× menor** do que ele aprendeu — e a textura que separa `spotted`
+de `skin-damaged` não sobrevive a essa escala.
 
 **O mount M12 destacável resolve** — trocando só a lente, mantendo os 15 cm:
 
 | FOV diagonal | focal | campo útil | grão no modelo | grãos/quadro |
 |---|---|---|---|---|
-| 120° (atual) | 1,3 mm | 312 mm | 11 px | ~1000 |
-| 60° | 4,0 mm | 104 mm | 34 px | 112 |
-| 45° | 5,5 mm | 75 mm | 48 px | 58 |
-| **~30°** | **~8,6 mm** | **48 mm** | **74 px** | **24** |
-| 20° | 13 mm | 32 mm | 113 px | 10 |
+| 120° (atual) | 1,3 mm | 312 mm | 16 px | ~1000 |
+| 60° | 4,0 mm | 104 mm | 47 px | 112 |
+| **45°** | **5,5 mm** | **75 mm** | **66 px** | **58** |
+| **~30°** | **~8,6 mm** | **48 mm** | **102 px** | **24** |
+| 20° | 13 mm | 32 mm | 155 px | 10 |
 
-**~30° (lente M12 de ~8 mm) é a mais bem casada:** 74 px por grão fica no meio do
-alvo, e ~24 grãos por quadro bate com a faixa das cenas de treino (6-25).
+**30-45° (lente M12 de 5,5-8,6 mm) é a faixa bem casada** com o alvo de 60-150 px.
 
 > O raciocínio original — 120° em vez de 160° para controlar distorção — está
 > certo na direção. Só que, nesta distância, o eixo que mais pesa não é
@@ -72,35 +71,44 @@ alvo, e ~24 grãos por quadro bate com a faixa das cenas de treino (6-25).
 Como o hardware já está comprado, a solução é por software — e é melhor do que
 parece. **O problema nunca foi o sensor, foi o *downscale*.**
 
-Reduzir o quadro inteiro de 1640 px para os 512 px do modelo é o que espreme o
-grão até 11 px. Mas o IMX219 tem 3280×2464:
+Reduzir o quadro inteiro de 1640 px para a entrada do modelo é o que espreme o
+grão até 16 px. Mas o IMX219 tem 3280×2464:
 
 ```
 campo 415 mm em 3280 px            ->  7,9 px/mm
-recorte de 512×512 no centro       ->  janela de 65 × 65 mm
-grão de 7 mm                       ->  ~55 px   (DENTRO do alvo 48-120)
+recorte de 704×704 no centro       ->  janela de 89 × 89 mm
+grão de 7 mm                       ->  ~55 px   (logo abaixo do alvo 60-150)
 ```
 
-Recortando 512×512 direto do centro do sensor cheio, **em escala 1:1 e sem
-reescalar nada**, o grão chega ao modelo do tamanho certo. E o centro é
-justamente onde a lente de 120° distorce menos — o recorte resolve escala e
-distorção de uma vez.
+Recortando 704×704 direto do centro do sensor cheio, **em escala 1:1 e sem
+reescalar nada**, o grão chega ao modelo praticamente do tamanho certo. E o
+centro é justamente onde a lente de 120° distorce menos — o recorte resolve
+escala e distorção de uma vez.
 
 ```bash
-python3 vigil_jetson.py --camera csi --roi 512
+python3 vigil_jetson.py --camera csi --roi 704
 ```
 
 | | binado + downscale | **ROI no sensor cheio** |
 |---|---|---|
 | Captura | 1640×1232 @30 fps | 3280×2464 @21 fps |
-| Janela útil | 312 mm | **65 mm** |
-| Grão no modelo | 11 px | **~55 px** |
-| Reescala | 1232 → 512 (perde detalhe) | **nenhuma (1:1)** |
-| Grãos por quadro | ~1000 (inútil) | **~40** |
+| Janela útil | 312 mm | **89 mm** |
+| Grão no modelo | 16 px | **~55 px** |
+| Reescala | 1232 → 704 (perde detalhe) | **nenhuma (1:1)** |
+| Grãos por quadro | ~1000 (inútil) | **~82** |
 
-**O custo:** a janela de inspeção passa a ser 65 × 65 mm, e usa-se ~2% dos
-pixels do sensor. Para bancada é ótimo (~40 grãos por quadro bate com as cenas
-de treino de 6-25); para vazão, move-se a bandeja.
+**Por que 704 e não 512:** no ROI 1:1 o grão em pixels é fixado pela **óptica**
+(7,9 px/mm × 7 mm ≈ 55 px) — a entrada do modelo **não muda o detalhe do grão**,
+muda a **área**. Subir de 512 para 704 leva a janela de 65 mm para 89 mm, ~1,9×
+mais grãos por quadro, e no Jetson custa ~28 fps (de 53) — ainda acima dos 21 fps
+que a câmera entrega nesse modo. Ou seja: **área de graça**.
+
+**O custo:** a janela de inspeção é 89 × 89 mm, e usa-se ~6% dos pixels do
+sensor. Para bancada serve; para vazão, move-se a bandeja.
+
+> Os ~55 px ficam **logo abaixo** do alvo de 60-150. Não é impeditivo, mas
+> aproximar a câmera de 15 para ~13 cm põe o grão dentro da faixa — vale medir
+> com a régua antes de congelar a geometria.
 
 > Trocar a lente para ~30° continua sendo a solução *mais limpa* — usaria o
 > sensor inteiro para a mesma janela. Mas com o ROI o rig atual **já funciona**,
@@ -154,9 +162,15 @@ CSI_TRAVAS = {
 
 ### Resolução
 
-Use **1640×1232 @ 30 fps** — modo binado do IMX219, que mantém o **FOV completo**.
+Para o rig, use **3280×2464 @ 21 fps** — o modo cheio, que é o que torna o ROI
+1:1 possível (§1c). O `--roi 704` recorta o centro sem reescalar.
+
+O modo binado **1640×1232 @ 30 fps** mantém o mesmo FOV e serve para enquadrar e
+calibrar, mas não para capturar dataset: o downscale até a entrada do modelo é
+justamente o que espreme o grão até 16 px.
+
 Os modos 1080p **recortam** o sensor, ou seja, mudam o enquadramento e quebrariam
-a padronização entre sessões.
+a padronização entre sessões — não usar.
 
 ## 3. Distorção da lente de 120°
 
@@ -167,11 +181,11 @@ do mesmo grão no centro, e o modelo aprende isso como se fosse variação real.
 de uma vez:
 
 - descarta as bordas, onde a distorção é pior;
-- elimina o *letterbox* — o modelo come 512×512 quadrado, então uma imagem 4:3
+- elimina o *letterbox* — o modelo come 704×704 quadrado, então uma imagem 4:3
   gastaria ~25% da entrada em barra preta.
 
 ```bash
-python3 vigil_jetson.py --camera csi --roi 512     # modo do rig (ver §1c)
+python3 vigil_jetson.py --camera csi --roi 704     # modo do rig (ver §1c)
 ```
 
 ## 4. Geometria — o que precisa ficar fixo
@@ -197,7 +211,7 @@ python3 vigil_jetson.py --camera csi --roi 512     # modo do rig (ver §1c)
 
 ```bash
 # coleta (salva recorte + revisao.csv no formato do aprendizado_ativo.ipynb)
-python3 vigil_jetson.py --camera csi --roi 512 --out sessao.mp4
+python3 vigil_jetson.py --camera csi --roi 704 --out sessao.mp4
 ```
 
 ## 6. Ficha do rig — PREENCHER e manter atualizada

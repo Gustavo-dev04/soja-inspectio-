@@ -19,9 +19,12 @@ import sys
 import cv2
 import numpy as np
 
-ENTRADA_MODELO = 512
+ENTRADA_MODELO = 704                   # RF-DETR Large (704 nativo)
+CANVAS_TREINO = 704                    # canvas do dataset sintético
 GRAO_MM = 7.0
-ALVO_MIN_PX, ALVO_MAX_PX = 48, 120     # faixa em que o modelo foi treinado
+# o modelo treina com grãos de 60-150 px do canvas; convertido para a entrada
+ALVO_MIN_PX = round(60 * ENTRADA_MODELO / CANVAS_TREINO)
+ALVO_MAX_PX = round(150 * ENTRADA_MODELO / CANVAS_TREINO)
 
 
 def analisa_exposicao(img):
@@ -88,7 +91,8 @@ def recomenda_roi(px_por_mm):
     if grao_px > ALVO_MAX_PX:
         # dá pra usar ROI maior e reduzir um pouco, ganhando área
         lado = int(ENTRADA_MODELO * grao_px / ((ALVO_MIN_PX + ALVO_MAX_PX) / 2))
-        print(f'\n  Alternativa: --roi {lado} (recorta mais área e reduz até 512;')
+        print(f'\n  Alternativa: --roi {lado} (recorta mais área e reduz até '
+              f'{ENTRADA_MODELO};')
         print(f'  grão fica ~{(ALVO_MIN_PX + ALVO_MAX_PX) / 2:.0f} px e cabe mais grão)')
     return ENTRADA_MODELO
 
@@ -174,7 +178,7 @@ def main():
             break
         vis = frame.copy()
         h, w = vis.shape[:2]
-        # marca onde ficaria o ROI de 512 e onde é o centro
+        # marca onde ficaria o ROI 1:1 da entrada do modelo e onde é o centro
         lado = min(ENTRADA_MODELO, h, w)
         x, y = (w - lado) // 2, (h - lado) // 2
         cv2.rectangle(vis, (x, y), (x + lado, y + lado), (0, 255, 255), 2)
