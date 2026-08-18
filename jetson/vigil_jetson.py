@@ -21,7 +21,8 @@ rastreamento e trava o veredito por contagem de varreduras, não por segundos.
 Dimensione antes com `calcular_vazao.py`, que diz a distância da câmera e a
 velocidade máxima da esteira para a configuração escolhida.
 
-O padrão é o celular via DroidCam — veja CAMERA_PADRAO logo abaixo se o IP mudar.
+O padrão é o celular via DroidCam. Quando o IP mudar, NÃO edite o código:
+    export VIGIL_CAMERA=http://10.128.188.122:4747/video
 
 Teclas: q sai · c zera a contagem · p pausa.
 
@@ -37,6 +38,7 @@ no docstring do IoUTracker.
 """
 import argparse
 import json
+import os
 import sys
 import time
 from collections import Counter, defaultdict
@@ -61,9 +63,12 @@ COLORS = {'intact': (90, 200, 90), 'immature': (60, 200, 200),
 RATIOS = {'broken': 0.85, 'skin-damaged': 0.80, 'spotted': 0.75, 'immature': 0.75}
 
 # Câmera padrão: o celular via DroidCam (o app mostra o IP na tela ao abrir).
-# Se o IP mudar — e ele muda quando o roteador renova o DHCP — troque aqui ou
-# passe --camera na linha de comando.
-CAMERA_PADRAO = 'http://192.168.15.5:4747/video'
+# O IP muda quando o roteador renova o DHCP, e trocar de rede (Wi-Fi de casa ->
+# roteamento do celular) muda a faixa inteira. Por isso vem de variável de
+# ambiente: `export VIGIL_CAMERA=http://SEU_IP:4747/video` no ~/.bashrc resolve
+# de uma vez, sem editar código.
+CAMERA_PADRAO = os.environ.get('VIGIL_CAMERA',
+                               'http://10.128.188.122:4747/video')
 LOCK_MIN_FRAMES = 8    # frames rastreando antes de travar a classe
 MIN_DRAW_FRAMES = 3    # abaixo disso é ruído piscante: não desenha
 SMOOTH = 0.4           # EMA da caixa (menor = mais estável)
