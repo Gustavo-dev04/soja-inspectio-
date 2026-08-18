@@ -768,6 +768,14 @@ Novas, da Era 3 (detecção/vídeo):
   gargalo, não o modelo; `--quality` mais baixo já ajuda)
 - Coleta de mais fotos reais pra validação robusta do modo foto (a validação
   atual de 91,7% é sobre só 12 fotos)
+- **Linha de base só com o 12,5k** (`model/treino_base12k_jetson.ipynb`, pronto
+  e testado, falta rodar): a estratégia se inverteu — em vez de adaptar o modelo
+  ao domínio novo, a câmara é construída para **reproduzir o domínio do
+  dataset**. Um treino só (COCO → 12,5k), com as cenas multi-grão renderizadas
+  a partir dos recortes do próprio dataset, na escala do rig (grão a ~89 px,
+  fundo da câmara com vinheta do ring light, densidade da esteira). Serve de
+  referência limpa: tudo que o dataset próprio ganhar depois é medido contra
+  ela. Testes sem GPU em `model/testar_base12k*.py`.
 - **Rodada do rig padronizado, nesta ordem** (§5.4-5.5):
   1. montar a câmara, fixar a distância em ~9,3 cm e **calibrar com a régua**
      (`jetson/calibrar_rig.py`), conferindo os 12,7 px/mm antes de congelar nada;

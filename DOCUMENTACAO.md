@@ -261,11 +261,19 @@ grãos imaturos) e `spotted` tem poucos exemplos. Com o rig padronizado e
 
 ### Fase 3 — Treino no novo domínio
 
-- [ ] Treinar **do zero a 704 px**, abandonando a cadeia FT1→FT4 (ela existia
-      para compensar escassez de dado, que acabou): estágio base 12,5 k → **um
-      fine-tuning só**, 100% rig
-- [ ] Testar antes se o estágio base ainda ajuda (COCO → rig direto pode
-      empatar) — A/B barato e informativo
+A estratégia se inverteu: em vez de adaptar o modelo ao domínio, **a câmara
+reproduz o domínio do dataset**. Isso permite uma linha de base limpa antes de
+qualquer captura própria.
+
+- [x] **Linha de base — só o 12,5 k** (`model/treino_base12k_jetson.ipynb`).
+      Um treino só, COCO → 12,5 k, com cenas multi-grão renderizadas a partir
+      dos recortes do próprio dataset, **na escala do rig** (grão a ~89 px,
+      fundo da câmara, densidade da esteira). Notebook pronto e testado; falta
+      rodar.
+- [ ] **Rodar o modelo base na câmara com soja real.** É o teste da aposta: se
+      inspecionar bem, o domínio foi mesmo reproduzido. Se não, a diferença que
+      sobrar diz exatamente o que o dataset próprio precisa cobrir
+- [ ] Fine-tune a partir do `.pth` base (não do COCO), com o dataset da Fase 2
 - [ ] Exportar ONNX e gerar a engine TensorRT **no próprio Jetson**
 
 ### Fase 4 — Medição que vale
@@ -413,7 +421,11 @@ defensável de um que cai no primeiro questionamento.
 - **Domain shift é o gargalo estrutural do projeto inteiro.** Ele reapareceu em
   todas as três eras (29% → 64% → 91,7%). Todo modelo treinado em fundo
   controlado cai para 3–8% em fundo/luz reais até passar por fine-tuning no
-  domínio de uso. É por isso que o padrão de captura é documento normativo.
+  domínio de uso. É por isso que o padrão de captura é documento normativo — e
+  por que a estratégia atual é **inverter o problema**: em vez de adaptar o
+  modelo ao domínio novo, construir a câmara para reproduzir o domínio do
+  dataset. Se der certo, o modelo base transfere sem fine-tune; se não der, a
+  diferença que sobrar é medível e diz o que capturar.
 - **`immature` (recall 0,04) e `spotted` (recall 0,30)** são as classes fracas
   do modelo atual. A causa identificada é rótulo errado + poucos exemplos, não
   arquitetura.
@@ -445,7 +457,9 @@ jetson/                        ── a frente do MVP ──
   README.md                    guia de ONNX → engine → app
 
 model/                         notebooks de treino (30+, uma por experimento)
-  treino_rfdetr_small_completo.ipynb    pipeline atual do modelo de borda
+  treino_base12k_jetson.ipynb           LINHA DE BASE: só o dataset 12,5k, pro Jetson
+  testar_base12k*.py                    testes do notebook acima, rodam sem GPU
+  treino_rfdetr_small_completo.ipynb    pipeline multi-estágio (histórico do FT1→FT4)
   tira_teima_capacidade.ipynb           comparativo decisivo YOLO vs RT-DETR
   COMPARATIVO_YOLO11S_VS_RTDETR.md      relatório completo do comparativo
   PROTOCOLO_ANOTACAO_VIDEO.md           protocolo de captura e anotação
