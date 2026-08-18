@@ -6,7 +6,22 @@ pro Jetson e responde a pergunta que motivou o experimento inteiro:
 
 ---
 
-## 0. Antes de tudo: o `.pth` não é o arquivo que roda aqui
+## 0. Cartão SD novo? Rode isto primeiro
+
+```bash
+chmod +x setup_jetson.sh && ./setup_jetson.sh
+```
+
+Faz o setup inteiro de uma imagem recém-gravada: confere JetPack/CUDA/TensorRT
+e espaço em disco, instala o que falta (`pip3`, OpenCV **do apt** — o do pip não
+traz GStreamer e a CSI não abre —, `cuda-python`), **reconstrói as engines** de
+todo `.onnx` que estiver na pasta e verifica cada uma. É idempotente: rodar de
+novo não estraga nada.
+
+⚠️ **Trocar o cartão SD troca a versão do TensorRT, e engine antiga não serve
+mais.** Guarde os `.onnx`, não os `.engine` — o script reconstrói em minutos.
+
+## 0b. Antes de tudo: o `.pth` não é o arquivo que roda aqui
 
 | arquivo | onde vive | serve pra |
 |---|---|---|
