@@ -21,6 +21,25 @@ novo não estraga nada.
 ⚠️ **Trocar o cartão SD troca a versão do TensorRT, e engine antiga não serve
 mais.** Guarde os `.onnx`, não os `.engine` — o script reconstrói em minutos.
 
+## 0a. Apresentação: um comando (ou um clique)
+
+```bash
+./demo.sh              # acha a câmera sozinho e abre em tela cheia
+./demo.sh nano         # usa a engine do nano em vez do small
+./demo.sh --video x.mp4 # roda um arquivo gravado
+./demo.sh --atalho     # cria o ícone clicável na área de trabalho
+```
+
+Feito para o pior cenário de demo: o IP do celular mudou de manhã, o Wi-Fi do
+auditório é outro, e você tem trinta segundos com a plateia olhando. Ele procura
+a câmera em quatro caminhos — `VIGIL_CAMERA`, o último IP que funcionou, o
+gateway (quando o celular é o roteador, ele **é** o gateway) e uma varredura da
+rede local — guarda o que deu certo, e **se nada responder cai num `.mp4`
+gravado** em vez de travar na sua frente.
+
+Usa `--conf 0.10` de propósito: a demo com celular na mão é fora do domínio de
+treino, e a confiança padrão de 0.35 esconderia detecções válidas.
+
 ## 0b. Antes de tudo: o `.pth` não é o arquivo que roda aqui
 
 | arquivo | onde vive | serve pra |

@@ -670,6 +670,8 @@ def main():
                     help='CSI com AE/AWB automáticos — só para ajustar o rig, '
                          'NUNCA para capturar dataset')
     ap.add_argument('--no-window', action='store_true', help='sem janela (só terminal/arquivo)')
+    ap.add_argument('--tela-cheia', action='store_true',
+                    help='janela em tela cheia (apresentação)')
     ap.add_argument('--class-offset', type=int, default=None,
                     help='desloca a leitura das colunas de classe (0 = extra no fim, '
                          '1 = extra na frente). Use --diag pra descobrir o certo.')
@@ -760,6 +762,8 @@ def main():
     win = 'Vigil.ia Jetson (q sai)'
     if not args.no_window:
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+        if args.tela_cheia:
+            cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     try:
         while True:
