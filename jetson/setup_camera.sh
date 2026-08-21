@@ -35,7 +35,27 @@ if ls /dev/video* >/dev/null 2>&1; then
 else
     erro "nenhum /dev/video* — o driver não subiu."
     echo
-    echo "  Confira NESTA ordem (o mais provável primeiro):"
+    # Distinção que economiza muito tempo: o LED do módulo indica que o trilho
+    # de 3,3 V chegou nele. Com LED aceso, o cabo está encaixado e na orientação
+    # certa — o problema deixa de ser físico e passa a ser device tree, que no
+    # Orin Nano Dev Kit sai de fábrica SEM câmera nenhuma habilitada.
+    echo "  >>> O LED do módulo da câmera está ACESO?"
+    echo
+    echo "      SE ESTÁ ACESO: o cabo está bom (o módulo tem energia). O caso"
+    echo "      quase certo é o DEVICE TREE — o Orin Nano Dev Kit vem sem"
+    echo "      nenhuma câmera habilitada. Habilite o IMX219:"
+    echo
+    echo "          sudo /opt/nvidia/jetson-io/jetson-io.py"
+    echo "          Configure Jetson 24pin CSI Connector"
+    echo "            -> Configure for compatible hardware"
+    echo "              -> Camera IMX219 Dual"
+    echo "                -> Save pin changes -> Save and reboot"
+    echo
+    echo "      Confirme antes que o kernel realmente não tentou carregar:"
+    echo "          sudo dmesg | grep -i -E 'imx219|nvcsi|vi5'"
+    echo "          grep -i overlays /boot/extlinux/extlinux.conf"
+    echo
+    echo "      SE ESTÁ APAGADO: é físico. Confira NESTA ordem:"
     echo "   1. A placa estava DESLIGADA quando você plugou o cabo?"
     echo "      Plugar com a Jetson ligada pode queimar o sensor."
     echo "      Desligue, replugue, ligue de novo."

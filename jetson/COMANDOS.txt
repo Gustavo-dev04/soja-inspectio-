@@ -146,12 +146,23 @@ python3 vigil_jetson.py --camera csi --quadrado --csi-sem-trava \
 # ver ao vivo (para enquadrar e ajustar o foco da lente)
 ./setup_camera.sh --ver
 
-# se não aparecer /dev/video*  ->  é físico; replugue com a placa desligada
-sudo dmesg | grep -i -E 'imx219|tegra-cam|camera'
+# --- nenhum /dev/video* ---
+# O LED do módulo indica se ele tem energia. Isso separa os dois casos:
+#
+#   LED ACESO   -> cabo OK; é DEVICE TREE (o Orin Nano Dev Kit vem sem
+#                  nenhuma câmera habilitada). Este é o caso comum.
+#   LED APAGADO -> é físico; replugue com a placa DESLIGADA
 
-# se /dev/video existe mas o sensor não aparece -> device tree
+sudo dmesg | grep -i -E 'imx219|nvcsi|vi5' | tail -20
+grep -i overlays /boot/extlinux/extlinux.conf
+ls /boot/*.dtbo 2>/dev/null | grep -i -E 'camera|imx'
+
+# habilitar o IMX219 no device tree (reinicia no fim)
 sudo /opt/nvidia/jetson-io/jetson-io.py
-#   Configure Jetson 24pin CSI Connector -> Camera IMX219 -> Save and reboot
+#   Configure Jetson 24pin CSI Connector
+#     -> Configure for compatible hardware
+#       -> Camera IMX219 Dual
+#         -> Save pin changes -> Save and reboot
 
 # se o nvarguscamerasrc não abrir
 sudo systemctl restart nvargus-daemon && sleep 2
