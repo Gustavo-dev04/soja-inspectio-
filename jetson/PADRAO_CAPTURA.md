@@ -215,7 +215,9 @@ CSI_TRAVAS = {
 ### Resolução
 
 Para o rig, use **3280×2464 @ 21 fps** — o modo cheio, que é o que torna o ROI
-1:1 possível (§1c). O `--roi 704 --tiles 2` recorta a faixa da câmara sem reescalar.
+1:1 possível (§1c). **Confirmado no aparelho** (o sensor lista os modos ao subir;
+`./setup_camera.sh` mostra a lista), e é dele que saem as 14 varreduras/s do
+dimensionamento de vazão — número medido, não assumido. O `--roi 704 --tiles 2` recorta a faixa da câmara sem reescalar.
 
 O modo binado **1640×1232 @ 30 fps** mantém o mesmo FOV e serve para enquadrar e
 calibrar, mas não para capturar dataset: o downscale até a entrada do modelo é
