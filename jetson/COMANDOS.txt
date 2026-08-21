@@ -157,12 +157,21 @@ sudo dmesg | grep -i -E 'imx219|nvcsi|vi5' | tail -20
 grep -i overlays /boot/extlinux/extlinux.conf
 ls /boot/*.dtbo 2>/dev/null | grep -i -E 'camera|imx'
 
-# habilitar o IMX219 no device tree (reinicia no fim)
-sudo /opt/nvidia/jetson-io/jetson-io.py
-#   Configure Jetson 24pin CSI Connector
-#     -> Configure for compatible hardware
-#       -> Camera IMX219 Dual
-#         -> Save pin changes -> Save and reboot
+# habilitar o IMX219 no device tree
+#
+# O jetson-io NAO funciona no JetPack 6/7 (quebra com "No DTB found", porque o
+# DTB base passou a vir da partição e não do /boot). E só acrescentar OVERLAYS
+# no extlinux.conf não basta: o bootloader aplica ou descarta em silêncio.
+#
+# Use o script, que mescla o overlay no DTB com fdtoverlay e CONFERE que o nó
+# imx219 entrou ANTES de mexer no boot:
+
+sudo ./habilitar_camera.sh              # IMX219 no CAM0
+sudo ./habilitar_camera.sh imx219-C     # se a câmera estiver no CAM1
+sudo reboot
+
+# desfazer, se precisar
+sudo ./habilitar_camera.sh --desfazer
 
 # se o nvarguscamerasrc não abrir
 sudo systemctl restart nvargus-daemon && sleep 2
