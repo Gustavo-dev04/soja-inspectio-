@@ -339,6 +339,9 @@ livre, este documento vira v2 e o dataset não se mistura.
       num trecho marcado); ela precisa ficar abaixo de 69 mm/s
 - [ ] Definir/imprimir a **flange 3D** acoplando ring light + lente + parede da
       câmara, mantendo alinhamento no eixo óptico e a distância fixa de 9,3 cm
+- [x] **Habilitar o IMX219 no device tree** — `sudo ./habilitar_camera.sh`.
+      No JetPack 6/7 nem o `jetson-io` nem o `OVERLAYS` do `extlinux.conf`
+      funcionam; ver `README.md` §0-camera
 - [ ] Conferir a **orientação do cabo CSI 22-pin** na instalação — os contatos
       podem precisar de inversão de lado dependendo do cabo; é erro comum
 - [ ] Travar o foco fisicamente depois de ajustado

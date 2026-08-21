@@ -21,6 +21,38 @@ novo não estraga nada.
 ⚠️ **Trocar o cartão SD troca a versão do TensorRT, e engine antiga não serve
 mais.** Guarde os `.onnx`, não os `.engine` — o script reconstrói em minutos.
 
+## 0-camera. Habilitar a câmera CSI (IMX219) no JetPack 6/7
+
+```bash
+sudo ./habilitar_camera.sh      # IMX219 no CAM0 (use imx219-C para o CAM1)
+sudo reboot
+./setup_camera.sh               # confere e captura um quadro de teste
+```
+
+**Os dois caminhos oficiais não funcionam** no Orin Nano Dev Kit com JetPack 7
+(L4T R39.2), e isso custa tempo se você não souber:
+
+| Caminho | O que acontece |
+|---|---|
+| `jetson-io.py` | sai sem imprimir nada (curses) |
+| `config-by-hardware.py` | `RuntimeError: No DTB found` — o DTB base passou a vir da partição, não do `/boot` |
+| `OVERLAYS` no `extlinux.conf` | o bootloader lê o arquivo (o `/proc/cmdline` prova), mas **descarta o overlay em silêncio** |
+
+O `habilitar_camera.sh` tira a aplicação do overlay do bootloader: mescla com
+`fdtoverlay` offline, **confere que o nó `imx219` entrou** no DTB resultante, e
+só então aponta o `FDT` do `extlinux.conf` para ele. Se a verificação falhar,
+ele para sem tocar no boot.
+
+Depurar pelo bootloader custa um reboot por tentativa; assim o erro aparece
+antes.
+
+Confirmado funcionando no Orin Nano Dev Kit, módulo `p3767-0005`, L4T R39.2:
+
+```
+imx219 9-0010: tegracam sensor driver:imx219_v2.0.6
+tegra-camrtc-capture-vi tegra-capture-vi: subdev imx219 9-0010 bound
+```
+
 ## 0a. Apresentação: um comando (ou um clique)
 
 ```bash
