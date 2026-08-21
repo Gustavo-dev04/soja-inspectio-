@@ -728,6 +728,20 @@ def main():
         sys.exit('\n'.join(msg))
     print(f'fonte OK: {quadro0.shape[1]}x{quadro0.shape[0]}')
 
+    # As travas de exposição (CSI_TRAVAS) foram escolhidas para a câmara fechada
+    # COM ring light. Fora dela — bancada, luz ambiente — 13 ms com ganho 1 dá
+    # uma imagem quase preta, e o wbmode=0 (sem balanço de branco) puxa para o
+    # magenta. Nada falha, e é fácil confundir com defeito da câmera: por isso o
+    # aviso, medindo o primeiro quadro em vez de deixar a pessoa descobrir na tela.
+    if args.camera == 'csi' and not args.csi_sem_trava and not args.source:
+        _brilho = cv2.cvtColor(quadro0, cv2.COLOR_BGR2GRAY).mean()
+        if _brilho < 25:
+            print(f'\nAVISO: quadro muito escuro (brilho médio {_brilho:.0f}/255).')
+            print('  As travas de exposição estão LIGADAS e foram calibradas para a')
+            print('  câmara fechada com ring light. Sem ele, use o automático:')
+            print('      --csi-sem-trava')
+            print('  (só para montar e focar — dado de dataset exige as travas)\n')
+
     # ---- modo diagnóstico: descobre onde estão as classes de verdade ----
     if args.diag:
         print(f'\ndiagnóstico: {args.diag} frames…')
