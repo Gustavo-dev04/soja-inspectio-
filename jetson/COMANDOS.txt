@@ -128,6 +128,35 @@ python3 vigil_jetson.py --camera csi --quadrado --csi-sem-trava \
   --engine SUA_ENGINE.engine
 
 --------------------------------------------------------------------------------
+ 7b. PRIMEIRA VEZ COM A CÂMERA CSI (IMX219)
+--------------------------------------------------------------------------------
+
+ !! DESLIGUE A JETSON ANTES DE PLUGAR O CABO !!
+    Plugar com a placa ligada pode queimar o sensor.
+
+ Orientação do flat:
+   - lado da Jetson : contatos metálicos virados para o DISSIPADOR
+   - lado da câmera : contatos virados para BAIXO (lado da PCB)
+   - trava do conector puxada antes de inserir, empurrada depois
+   - conector de 22 pinos (o de 15 é do Jetson Nano antigo, não serve)
+
+# diagnostica cabo, kernel, driver, GStreamer e OpenCV, e salva uma foto
+./setup_camera.sh
+
+# ver ao vivo (para enquadrar e ajustar o foco da lente)
+./setup_camera.sh --ver
+
+# se não aparecer /dev/video*  ->  é físico; replugue com a placa desligada
+sudo dmesg | grep -i -E 'imx219|tegra-cam|camera'
+
+# se /dev/video existe mas o sensor não aparece -> device tree
+sudo /opt/nvidia/jetson-io/jetson-io.py
+#   Configure Jetson 24pin CSI Connector -> Camera IMX219 -> Save and reboot
+
+# se o nvarguscamerasrc não abrir
+sudo systemctl restart nvargus-daemon && sleep 2
+
+--------------------------------------------------------------------------------
  8. QUANDO ALGO DÁ ERRADO
 --------------------------------------------------------------------------------
 
