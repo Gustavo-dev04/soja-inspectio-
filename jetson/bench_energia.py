@@ -191,7 +191,7 @@ def main():
     print(f'modo de energia : {modo_energia()}')
     if not args.comando:
         print(f'ENGINE MEDIDA   : {eng}')
-    print(f'carga           : {carga[:120]}')
+    print(f'carga           : {carga}')
     print(f'fases           : {args.ocioso:.0f}s ocioso + {args.carga:.0f}s carga'
           f' + {args.resfria:.0f}s resfriando')
     print()

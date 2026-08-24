@@ -346,10 +346,20 @@ aprendido. Histórico completo, incluindo bugs de medição no caminho (off-by-o
 de classe, tracker depreciado) em `model/COMPARATIVO_YOLO11S_VS_RTDETR.md` §11.
 
 **Validado no aparelho:** engine TensorRT FP16 construída no Orin Nano roda a
-**53,2 qps** no modelo de 512 px e **98,2 qps** no de 384 px. Consumo medido
-(`jetson/bench_energia.py`): 3,87 W ocioso, 9,39 W sob carga — o modelo custa
-**+5,5 W** —, junção a 52°C contra os ~95°C do throttling, e 0,14 kWh numa
-jornada de 15 h. Com ring light e motor, o rig inteiro fica em ~20-25 W. — cabe em tempo real com folga, sem precisar
+**59,3 qps** no modelo de 512 px e **98,2 qps** no de 384 px (medições com
+warm-up longo; o primeiro ensaio do 512, com warm-up curto, deu 53,2).
+
+Consumo medido (`jetson/bench_energia.py`, modo 15 W): 3,9 W ocioso, 10,6 W
+sob carga no 512 e 9,4 W no 384 — o modelo custa +5,5 a +6,6 W. Junção a
+52-53°C contra os ~95°C do throttling, e 0,16 kWh numa jornada de 15 h. Com
+ring light e motor, o rig inteiro fica em ~20-25 W.
+
+**A escolha entre 384 e 512 não é de consumo nem de velocidade:** 1,2 W de
+diferença (R$ 0,50/mês) e ambos muito acima das 14 varreduras/s que o
+dimensionamento pede, já que a câmera trava em 21 fps. Decide-se por
+qualidade, e os 512 px dão ~33% mais pixel linear no grão. Escalando o 512
+para 704 px pela área: ~31 qps, ou 15,7 varreduras/s com 2 recortes — acima
+das 14 assumidas, então a margem dos 41 kg/h se mantém. — cabe em tempo real com folga, sem precisar
 de INT8, do RF-DETR Nano ou de DeepStream. App ao vivo funcionando
 (`jetson/vigil_jetson.py`), forte em multi-grão e fraco em grão solto, o que é
 consequência direta do dataset (91% das caixas vêm de cena densa) e está

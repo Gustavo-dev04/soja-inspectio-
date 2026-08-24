@@ -127,21 +127,28 @@ falha dominante em vídeo.
 - Engine TensorRT **FP16 construída no próprio Jetson**:
   **53,2 qps** no modelo de 512 px, **98,2 qps** no de 384 px — ambos medidos,
   em modo 15 W.
-- **Consumo medido** (`jetson/bench_energia.py`, ao ar livre, modelo de 384 px):
+- **Consumo medido** (`jetson/bench_energia.py`, ao ar livre, modo 15 W):
 
-  | | |
-  |---|---|
-  | Ocioso | 3,87 W |
-  | Sob carga | 9,39 W (pico 10,9) |
-  | Custo do modelo | **+5,51 W** |
-  | Temperatura de junção | 52°C máx — contra ~95°C do throttling |
-  | Jornada de 15 h | 0,14 kWh/dia ≈ R$ 3,80/mês |
-  | RAM sob carga | 4,0 GB de 7,6 |
+  | | 384 px | 512 px |
+  |---|---|---|
+  | Velocidade | 98,2 qps | 59,3 qps |
+  | Ocioso | 3,87 W | 3,99 W |
+  | Sob carga | 9,39 W | **10,62 W** (pico 11,6) |
+  | Custo do modelo | +5,51 W | +6,63 W |
+  | Junção máx | 52,0°C | 53,0°C — contra ~95°C do throttling |
+  | RAM sob carga | 4,0 GB | 4,1 GB de 7,6 |
+  | Jornada de 15 h | 0,14 kWh | 0,16 kWh ≈ R$ 4,30/mês |
+
+  **Nem consumo nem velocidade separam os dois modelos na prática.** A
+  diferença de potência é 1,2 W (R$ 0,50/mês), e a câmera trava em 21 fps, de
+  modo que ambos sobram com folga sobre as 14 varreduras/s do dimensionamento.
+  A escolha é por **qualidade**, e aí os 512 px ganham: ~33% mais pixel linear
+  no grão, que é o que compra recall de defeito.
 
   Com o ring light (5 W) e o motor da esteira, **o rig inteiro fica em
-  ~20-25 W** — menos que uma lâmpada. A fonte do dev kit é de 65 W, então há
-  folga larga. Falta repetir dentro da câmara fechada por 14-16 h, que é onde
-  a temperatura estabiliza num patamar mais alto.
+  ~20-25 W** — menos que uma lâmpada, e roda de bateria. A fonte do dev kit é
+  de 65 W, folga larga. Falta repetir dentro da câmara fechada por 14-16 h,
+  que é onde a temperatura estabiliza num patamar mais alto.
 - App de inferência ao vivo funcionando, com câmera CSI e travamento de
   exposição/balanço de branco.
 - Comportamento observado: **forte em multi-grão, fraco em grão solto** — o que
