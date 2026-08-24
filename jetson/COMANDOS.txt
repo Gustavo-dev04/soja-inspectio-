@@ -95,6 +95,20 @@ python3 testar_esteira.py
 python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
   --source teste_soja.mp4 --no-window
 
+# consumo em watts + temperatura (ocioso x carga x resfriamento)
+python3 bench_energia.py                       # engine padrão, 60 s de carga
+python3 bench_energia.py --carga 300           # ensaio mais longo
+python3 bench_energia.py --horas 16 --kwh 0.95 # ajusta a conta de energia
+# com o app inteiro em vez do trtexec (inclui câmera, rastreio e desenho):
+python3 bench_energia.py --comando "python3 vigil_jetson.py \
+  --engine soja_rfdetr_small_CAMPEAO_fp16.engine --source teste_soja.mp4 --no-window"
+
+# qual modo de energia está ativo (MUDA TUDO — anote junto do resultado)
+sudo nvpmodel -q
+
+# acompanhar ao vivo
+sudo tegrastats
+
 # COMO LER O HUD:
 #   ms  = só a inferência do modelo
 #   fps = o laço inteiro (rede + decode + rastreio + desenho)
