@@ -124,9 +124,24 @@ falha dominante em vídeo.
 
 ### 4.3 Jetson Orin Nano — validado no aparelho
 
-- Engine TensorRT **FP16 construída no próprio Jetson**, rodando a
-  **53,2 qps (18,7 ms de compute)** — medido, com o modelo de 512 px, em modo
-  15 W.
+- Engine TensorRT **FP16 construída no próprio Jetson**:
+  **53,2 qps** no modelo de 512 px, **98,2 qps** no de 384 px — ambos medidos,
+  em modo 15 W.
+- **Consumo medido** (`jetson/bench_energia.py`, ao ar livre, modelo de 384 px):
+
+  | | |
+  |---|---|
+  | Ocioso | 3,87 W |
+  | Sob carga | 9,39 W (pico 10,9) |
+  | Custo do modelo | **+5,51 W** |
+  | Temperatura de junção | 52°C máx — contra ~95°C do throttling |
+  | Jornada de 15 h | 0,14 kWh/dia ≈ R$ 3,80/mês |
+  | RAM sob carga | 4,0 GB de 7,6 |
+
+  Com o ring light (5 W) e o motor da esteira, **o rig inteiro fica em
+  ~20-25 W** — menos que uma lâmpada. A fonte do dev kit é de 65 W, então há
+  folga larga. Falta repetir dentro da câmara fechada por 14-16 h, que é onde
+  a temperatura estabiliza num patamar mais alto.
 - App de inferência ao vivo funcionando, com câmera CSI e travamento de
   exposição/balanço de branco.
 - Comportamento observado: **forte em multi-grão, fraco em grão solto** — o que

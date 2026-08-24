@@ -346,7 +346,10 @@ aprendido. Histórico completo, incluindo bugs de medição no caminho (off-by-o
 de classe, tracker depreciado) em `model/COMPARATIVO_YOLO11S_VS_RTDETR.md` §11.
 
 **Validado no aparelho:** engine TensorRT FP16 construída no Orin Nano roda a
-**53,2 qps** (18,7 ms de compute) — cabe em tempo real com folga, sem precisar
+**53,2 qps** no modelo de 512 px e **98,2 qps** no de 384 px. Consumo medido
+(`jetson/bench_energia.py`): 3,87 W ocioso, 9,39 W sob carga — o modelo custa
+**+5,5 W** —, junção a 52°C contra os ~95°C do throttling, e 0,14 kWh numa
+jornada de 15 h. Com ring light e motor, o rig inteiro fica em ~20-25 W. — cabe em tempo real com folga, sem precisar
 de INT8, do RF-DETR Nano ou de DeepStream. App ao vivo funcionando
 (`jetson/vigil_jetson.py`), forte em multi-grão e fraco em grão solto, o que é
 consequência direta do dataset (91% das caixas vêm de cena densa) e está

@@ -168,6 +168,13 @@ def main():
             if not cands:
                 sys.exit('nenhuma engine .engine aqui — use --engine ou --comando')
             eng = cands[0]
+            # Escolher em silêncio a primeira em ordem alfabética já fez medir o
+            # nano achando que era o small ('n' vem antes de 's'). Com mais de
+            # uma engine na pasta, a escolha tem que ser explícita.
+            if len(cands) > 1:
+                sys.exit('há mais de uma engine aqui — diga qual, para o número '
+                         'não sair com o nome errado:\n'
+                         + ''.join(f'    --engine {c}\n' for c in cands))
         trtexec = next((p for p in ('/usr/src/tensorrt/bin/trtexec',
                                     shutil.which('trtexec') or '')
                         if p and os.path.exists(p)), None)
@@ -182,6 +189,8 @@ def main():
     print(' Consumo e temperatura — Vígil.ia no Jetson')
     print('=' * 66)
     print(f'modo de energia : {modo_energia()}')
+    if not args.comando:
+        print(f'ENGINE MEDIDA   : {eng}')
     print(f'carga           : {carga[:120]}')
     print(f'fases           : {args.ocioso:.0f}s ocioso + {args.carga:.0f}s carga'
           f' + {args.resfria:.0f}s resfriando')
