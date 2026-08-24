@@ -44,7 +44,7 @@ posição e instante de cada grão.
 | Parâmetro | Meta | Situação |
 |---|---|---|
 | Vazão | **0,5 t/dia em 14–16 h** = ~33 kg/h = ~58 grãos/s | dimensionado: **41 kg/h** de teto (folga 1,23×) |
-| Operação | 14–16 h contínuas | ensaio térmico pendente |
+| Operação | 14–16 h contínuas | **30 min sem throttling** (56°C, 39°C de margem); falta o ensaio na câmara fechada |
 | Câmara | 100 mm de faixa × 150 mm de curso | definida |
 | Hardware | NVIDIA Jetson Orin Nano + câmera IMX219 | **validado no aparelho** |
 | Classes | 5, com decisão binária premium × não-premium | modelo treinado, **acurácia a revalidar no rig** |
@@ -125,8 +125,9 @@ falha dominante em vídeo.
 ### 4.3 Jetson Orin Nano — validado no aparelho
 
 - Engine TensorRT **FP16 construída no próprio Jetson**:
-  **53,2 qps** no modelo de 512 px, **98,2 qps** no de 384 px — ambos medidos,
-  em modo 15 W.
+  **59,3 qps** no modelo de 512 px, **98,2 qps** no de 384 px — ambos medidos,
+  em modo 15 W. (O primeiro ensaio do 512 deu 53,2 qps com warm-up curto,
+  antes de os clocks subirem de vez.)
 - **Consumo medido** (`jetson/bench_energia.py`, ao ar livre, modo 15 W):
 
   | | 384 px | 512 px |
@@ -147,8 +148,24 @@ falha dominante em vídeo.
 
   Com o ring light (5 W) e o motor da esteira, **o rig inteiro fica em
   ~20-25 W** — menos que uma lâmpada, e roda de bateria. A fonte do dev kit é
-  de 65 W, folga larga. Falta repetir dentro da câmara fechada por 14-16 h,
-  que é onde a temperatura estabiliza num patamar mais alto.
+  de 65 W, folga larga.
+
+- **Ensaio térmico de 30 min contínuos** (512 px, ar livre, modo 15 W):
+
+  | | 60 s | 30 min |
+  |---|---|---|
+  | Potência | 10,62 W | 10,48 W |
+  | Junção máx | 53,0°C | **56,4°C** |
+  | Throughput | 59,3 qps | **59,3 qps** |
+
+  **Sem throttling.** A temperatura subiu 3,4°C em trinta vezes mais tempo —
+  já é platô, não rampa —, e o throughput idêntico é a prova direta: clock
+  reduzido derrubaria o qps junto. Restam **39°C de margem** até os ~95°C onde
+  o Orin começa a reduzir.
+
+  Falta o mesmo ensaio **dentro da câmara fechada**, onde o ring light aquece
+  por dentro. Mesmo somando 15-20°C, a margem se mantém — mas é medição, não
+  dedução, e o que roda 16 h é o `vigil_jetson.py`, não o `trtexec`.
 - App de inferência ao vivo funcionando, com câmera CSI e travamento de
   exposição/balanço de branco.
 - Comportamento observado: **forte em multi-grão, fraco em grão solto** — o que

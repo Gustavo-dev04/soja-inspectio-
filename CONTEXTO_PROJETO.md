@@ -354,6 +354,13 @@ sob carga no 512 e 9,4 W no 384 — o modelo custa +5,5 a +6,6 W. Junção a
 52-53°C contra os ~95°C do throttling, e 0,16 kWh numa jornada de 15 h. Com
 ring light e motor, o rig inteiro fica em ~20-25 W.
 
+**Ensaio térmico de 30 min contínuos (512 px, ar livre):** 10,48 W, junção
+estabilizada em 56,4°C e throughput **idêntico** ao do ensaio de 60 s
+(59,3 qps). Sem throttling — a temperatura subiu 3,4°C em trinta vezes mais
+tempo, e qps constante é a prova direta de que o clock não caiu. Restam 39°C
+de margem até os ~95°C. Falta repetir dentro da câmara fechada, e com o
+`vigil_jetson.py` em vez do `trtexec`, que é o que vai rodar 16 h.
+
 **A escolha entre 384 e 512 não é de consumo nem de velocidade:** 1,2 W de
 diferença (R$ 0,50/mês) e ambos muito acima das 14 varreduras/s que o
 dimensionamento pede, já que a câmera trava em 21 fps. Decide-se por
