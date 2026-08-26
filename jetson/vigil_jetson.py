@@ -7,7 +7,8 @@ e veredito travado por grão, pra o comportamento ser idêntico ao do Deck.
 
     python3 vigil_jetson.py                            # celular (DroidCam, padrão)
     python3 vigil_jetson.py --camera 0                 # webcam/USB
-    python3 vigil_jetson.py --camera csi               # câmera CSI (conector da placa)
+    python3 vigil_jetson.py --camera csi               # câmera CSI (sensor 0)
+    python3 vigil_jetson.py --camera csi:1             # segundo sensor CSI
     python3 vigil_jetson.py --source video.mp4 --out saida.mp4   # arquivo
 
 MODO RIG (câmara de inspeção com esteira — ver jetson/PADRAO_CAPTURA.md):
@@ -486,15 +487,24 @@ def pipeline_csi(sensor=0, largura=CSI_LARGURA, altura=CSI_ALTURA, fps=CSI_FPS,
 
 
 def abrir_camera(spec, largura=1280, altura=720, travar_csi=True, roi=0):
-    if spec == 'csi':
+    # 'csi' = sensor 0; 'csi:1' = sensor 1. Qual número corresponde a qual
+    # conector depende do overlay carregado: com um overlay de câmera única
+    # (imx219-A ou imx219-C) só existe o sensor 0, seja qual for o conector
+    # físico; com o overlay `dual`, CAM0 é 0 e CAM1 é 1. Por isso a escolha é
+    # parâmetro, e não dedução a partir do conector.
+    if spec == 'csi' or spec.startswith('csi:'):
+        sensor = int(spec.split(':', 1)[1]) if ':' in spec else 0
         if roi:   # sensor cheio: a janela vem do recorte, não do downscale
-            pipe = pipeline_csi(largura=CSI_ROI_LARGURA, altura=CSI_ROI_ALTURA,
-                                fps=CSI_ROI_FPS, travar=travar_csi)
-            print(f'CSI (IMX219) {CSI_ROI_LARGURA}x{CSI_ROI_ALTURA}@{CSI_ROI_FPS} '
+            pipe = pipeline_csi(sensor=sensor, largura=CSI_ROI_LARGURA,
+                                altura=CSI_ROI_ALTURA, fps=CSI_ROI_FPS,
+                                travar=travar_csi)
+            print(f'CSI (IMX219 sensor {sensor}) '
+                  f'{CSI_ROI_LARGURA}x{CSI_ROI_ALTURA}@{CSI_ROI_FPS} '
                   f'-> ROI central {roi}x{roi} (1:1, sem reescalar)')
         else:
-            pipe = pipeline_csi(travar=travar_csi)
-            print(f'CSI (IMX219) {CSI_LARGURA}x{CSI_ALTURA}@{CSI_FPS} (binado)')
+            pipe = pipeline_csi(sensor=sensor, travar=travar_csi)
+            print(f'CSI (IMX219 sensor {sensor}) '
+                  f'{CSI_LARGURA}x{CSI_ALTURA}@{CSI_FPS} (binado)')
         print(f'  AE/AWB {"TRAVADOS" if travar_csi else "AUTOMÁTICOS (não padronizado!)"}')
         return cv2.VideoCapture(pipe, cv2.CAP_GSTREAMER)
     cap = cv2.VideoCapture(int(spec) if spec.isdigit() else spec)
@@ -638,8 +648,8 @@ def main():
     ap = argparse.ArgumentParser(description='Vígil.ia no Jetson (RF-DETR + TensorRT)')
     ap.add_argument('--engine', default='soja_rfdetr_small_CAMPEAO_fp16.engine')
     ap.add_argument('--camera', default=CAMERA_PADRAO,
-                    help=f"índice (0), URL do DroidCam, ou 'csi'. "
-                         f"padrão: {CAMERA_PADRAO}")
+                    help=f"índice (0), URL do DroidCam, 'csi' ou 'csi:1' "
+                         f"(sensor CSI). padrão: {CAMERA_PADRAO}")
     ap.add_argument('--source', default=None, help='arquivo de vídeo (em vez da câmera)')
     ap.add_argument('--out', default=None, help='grava a saída anotada em .mp4')
     ap.add_argument('--conf', type=float, default=0.35)
@@ -733,7 +743,8 @@ def main():
     # uma imagem quase preta, e o wbmode=0 (sem balanço de branco) puxa para o
     # magenta. Nada falha, e é fácil confundir com defeito da câmera: por isso o
     # aviso, medindo o primeiro quadro em vez de deixar a pessoa descobrir na tela.
-    if args.camera == 'csi' and not args.csi_sem_trava and not args.source:
+    if str(args.camera).startswith('csi') and not args.csi_sem_trava \
+            and not args.source:
         _brilho = cv2.cvtColor(quadro0, cv2.COLOR_BGR2GRAY).mean()
         if _brilho < 25:
             print(f'\nAVISO: quadro muito escuro (brilho médio {_brilho:.0f}/255).')

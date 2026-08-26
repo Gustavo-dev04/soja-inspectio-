@@ -19,7 +19,7 @@ titulo(){ echo; echo "==========================================================
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$AQUI"
 ACAO="${1:-diag}"
-SENSOR=0
+SENSOR="${VIGIL_SENSOR:-}"     # vazio = descobrir sozinho
 
 titulo "1. O kernel enxerga a câmera?"
 
@@ -100,15 +100,33 @@ else
     erro "gst-inspect-1.0 ausente: sudo apt install -y gstreamer1.0-tools"
 fi
 
-MODOS="$(timeout 15 gst-launch-1.0 nvarguscamerasrc sensor-id=$SENSOR num-buffers=1 \
+# Qual sensor-id corresponde ao conector depende do OVERLAY carregado, não do
+# conector físico: com um overlay de câmera única (imx219-A ou imx219-C) só
+# existe o sensor 0, seja a câmera no CAM0 ou no CAM1; com o `dual`, CAM0 é 0 e
+# CAM1 é 1. Em vez de deduzir, testa.
+MODOS=""
+for s in ${SENSOR:-0 1}; do
+    M="$(timeout 15 gst-launch-1.0 nvarguscamerasrc sensor-id=$s num-buffers=1 \
          ! fakesink 2>&1 | grep -E 'GST_ARGUS: [0-9]+ x [0-9]+' || true)"
+    if [ -n "$M" ]; then
+        SENSOR="$s"; MODOS="$M"
+        ok "sensor $s respondeu"
+        break
+    fi
+    [ -z "${SENSOR:-}" ] && echo "    sensor $s: sem resposta"
+done
 if [ -n "$MODOS" ]; then
     echo "$MODOS" | sed 's/^/    /'
-    ok "sensor respondeu"
+    if [ "$SENSOR" != "0" ]; then
+        aviso "a câmera está no sensor $SENSOR — passe --camera csi:$SENSOR ao app"
+    fi
 else
-    erro "nvarguscamerasrc não conseguiu abrir o sensor."
+    erro "nenhum sensor CSI respondeu (testados: 0 e 1)."
     echo "  O serviço da câmera está rodando?"
     echo "    sudo systemctl restart nvargus-daemon && sleep 2"
+    echo "  O overlay do device tree é o do conector certo?"
+    echo "    CAM0 -> sudo ./habilitar_camera.sh imx219-A"
+    echo "    CAM1 -> sudo ./habilitar_camera.sh imx219-C"
     echo "  Depois rode este script de novo."
 fi
 
@@ -116,15 +134,15 @@ titulo "3. Capturando um quadro de verdade"
 
 # O teste que importa: um quadro chegando no OpenCV, pelo MESMO pipeline que o
 # app usa. Passar aqui e falhar no app seria contradição.
-python3 - "$ACAO" <<'PY'
+python3 - "$ACAO" "${SENSOR:-0}" <<'PY'
 import sys
 sys.path.insert(0, '.')      # o script já fez cd para a pasta dele
 import cv2
 from vigil_jetson import abrir_camera
 
-acao = sys.argv[1]
+acao, sensor = sys.argv[1], sys.argv[2]
 # sem trava de exposição: aqui o objetivo é VER, não padronizar
-cap = abrir_camera('csi', travar_csi=False)
+cap = abrir_camera(f'csi:{sensor}', travar_csi=False)
 ok, frame = None, None
 for _ in range(20):
     ok, frame = cap.read()
@@ -174,7 +192,7 @@ if [ $CODIGO -ne 0 ]; then
 fi
 ok "câmera CSI funcionando"
 
-cat <<'FIM_AJUDA'
+cat <<FIM_AJUDA
 
 Ver a imagem ao vivo (para enquadrar e focar):
     ./setup_camera.sh --ver
@@ -193,7 +211,7 @@ compensa sozinha entre sessões e recria o domain shift que o rig existe
 para eliminar — nada falha, o dado só fica inconsistente.
 
 Inspeção ao vivo pela CSI:
-    python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
-        --camera csi --quadrado --conf 0.10
+    python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \\
+        --camera csi:${SENSOR:-0} --quadrado --conf 0.10
 
 FIM_AJUDA

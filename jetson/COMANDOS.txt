@@ -180,9 +180,16 @@ ls /boot/*.dtbo 2>/dev/null | grep -i -E 'camera|imx'
 # Use o script, que mescla o overlay no DTB com fdtoverlay e CONFERE que o nó
 # imx219 entrou ANTES de mexer no boot:
 
-sudo ./habilitar_camera.sh              # IMX219 no CAM0
-sudo ./habilitar_camera.sh imx219-C     # se a câmera estiver no CAM1
+sudo ./habilitar_camera.sh              # IMX219 no CAM0 (porta A)
+sudo ./habilitar_camera.sh imx219-C     # IMX219 no CAM1 (porta C)
 sudo reboot
+
+# QUAL sensor-id usar depende do OVERLAY, não do conector:
+#   overlay de câmera única (imx219-A ou -C) -> só existe o sensor 0
+#   overlay `dual`                            -> CAM0 = 0, CAM1 = 1
+# O setup_camera.sh testa 0 e 1 e diz qual respondeu. Use no app:
+#   --camera csi      (sensor 0)
+#   --camera csi:1    (sensor 1)
 
 # desfazer, se precisar
 sudo ./habilitar_camera.sh --desfazer
