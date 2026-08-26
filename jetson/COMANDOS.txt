@@ -1,0 +1,246 @@
+================================================================================
+ VÍGIL.IA — COMANDOS DO JETSON ORIN NANO
+ Cola e roda. Tudo assume que você está em ~/vigilia
+================================================================================
+
+ Engines:  soja_rfdetr_small_CAMPEAO_fp16.engine   (512 px, mais detalhe)
+           soja_rfdetr_nano_CAMPEAO_fp16.engine    (384 px, mais rápido)
+ Celular:  DroidCam na porta 4747
+
+--------------------------------------------------------------------------------
+ 1. APRESENTAÇÃO  (é só isto que você precisa no dia)
+--------------------------------------------------------------------------------
+
+cd ~/vigilia && ./demo.sh
+
+# variações
+./demo.sh nano                    # usa o modelo nano
+./demo.sh --conf 0.20             # menos caixa (se estiver detectando demais)
+./demo.sh --video teste_soja.mp4  # roda um arquivo, sem depender de rede
+./demo.sh --atalho                # cria o ícone clicável na área de trabalho
+
+# TECLAS durante a demo:  q = sai   ·   c = zera a contagem   ·   p = pausa
+
+# ANTES DA APRESENTAÇÃO — grave um vídeo de reserva enquanto tudo funciona.
+# Se a rede falhar no dia, o demo.sh cai nele automaticamente.
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --camera http://10.128.188.122:4747/video --conf 0.10 --out demo_reserva.mp4
+
+--------------------------------------------------------------------------------
+ 2. RODAR NA MÃO  (quando quiser controle fino)
+--------------------------------------------------------------------------------
+
+# fixa o IP do celular de uma vez (não precisa mais passar --camera)
+echo 'export VIGIL_CAMERA=http://10.128.188.122:4747/video' >> ~/.bashrc
+source ~/.bashrc
+
+# ao vivo, modelo small
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine --conf 0.10
+
+# ao vivo, modelo nano
+python3 vigil_jetson.py --engine soja_rfdetr_nano_CAMPEAO_fp16.engine --conf 0.10
+
+# num arquivo de vídeo, gravando a saída anotada
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --source teste_soja.mp4 --conf 0.10 --out saida.mp4
+
+# forçando o IP na linha de comando (IP diferente do exportado)
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --camera http://SEU_IP_AQUI:4747/video --conf 0.10
+
+# gerando o laudo (contagem, % premium, massa estimada, kg/h)
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --conf 0.10 --laudo laudo.json
+
+--------------------------------------------------------------------------------
+ 3. COMO ENQUADRAR  (decide se detecta ou não)
+--------------------------------------------------------------------------------
+
+ O modelo foi treinado com o grão ocupando 48-120 px na entrada de 512.
+ Na tela do celular, isso quer dizer:
+
+   - devem caber uns 5 a 10 GRÃOS NA LARGURA da imagem, não cinquenta
+   - se os grãos parecem pontinhos, aproxime o celular
+   - fundo ESCURO e FOSCO, luz vindo de cima
+   - grãos espalhados, SEM SE ENCOSTAR
+
+--------------------------------------------------------------------------------
+ 4. DIAGNÓSTICO  (rode isto antes de confiar em qualquer resultado)
+--------------------------------------------------------------------------------
+
+# mapeamento de classe: a coluna campeã tem que ser 'intact'
+# (ponha soja na frente da câmera enquanto roda)
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --conf 0.10 --diag 300
+
+# se a coluna campeã NÃO for intact, acrescente aos comandos:
+#   --class-offset 0    -> coluna extra fica no FIM
+#   --class-offset 1    -> coluna extra fica na FRENTE
+
+# entradas e saídas da engine
+python3 inspect_engine.py soja_rfdetr_small_CAMPEAO_fp16.engine
+
+# testes que rodam sem câmera (rastreamento, recortes, contagem, memória)
+python3 testar_esteira.py
+
+--------------------------------------------------------------------------------
+ 5. VELOCIDADE
+--------------------------------------------------------------------------------
+
+# fps puro do modelo, sem app nenhum (esperado ~53 qps no small/512)
+./bench_trt.sh soja_rfdetr_small_CAMPEAO.onnx fp16
+./bench_trt.sh soja_rfdetr_nano_CAMPEAO.onnx fp16
+
+# fps do app sem rede e sem janela — isola modelo + rastreamento
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --source teste_soja.mp4 --no-window
+
+# consumo em watts + temperatura (ocioso x carga x resfriamento)
+python3 bench_energia.py                       # engine padrão, 60 s de carga
+python3 bench_energia.py --carga 300           # ensaio mais longo
+python3 bench_energia.py --horas 16 --kwh 0.95 # ajusta a conta de energia
+# com o app inteiro em vez do trtexec (inclui câmera, rastreio e desenho):
+python3 bench_energia.py --comando "python3 vigil_jetson.py \
+  --engine soja_rfdetr_small_CAMPEAO_fp16.engine --source teste_soja.mp4 --no-window"
+
+# qual modo de energia está ativo (MUDA TUDO — anote junto do resultado)
+sudo nvpmodel -q
+
+# acompanhar ao vivo
+sudo tegrastats
+
+# COMO LER O HUD:
+#   ms  = só a inferência do modelo
+#   fps = o laço inteiro (rede + decode + rastreio + desenho)
+# ms ~19 e fps ~25 significa que o gargalo é a CÂMERA, não o Jetson.
+
+--------------------------------------------------------------------------------
+ 6. COMPARAR OS DOIS MODELOS  (mesmos quadros nos dois — é o único justo)
+--------------------------------------------------------------------------------
+
+python3 comparar_engines.py \
+  --engines soja_rfdetr_small_CAMPEAO_fp16.engine soja_rfdetr_nano_CAMPEAO_fp16.engine \
+  --gravar 15 --conf 0.10
+
+--------------------------------------------------------------------------------
+ 7. CÂMERA CSI + RIG  (quando a câmara de inspeção estiver montada)
+--------------------------------------------------------------------------------
+
+# calibrar com uma RÉGUA no fundo: mede px/mm e confere a exposição
+python3 calibrar_rig.py
+
+# dimensionar: distância da câmera, velocidade máx da esteira, kg/h
+python3 calcular_vazao.py --compensado
+python3 calcular_optica.py
+
+# rig completo (esteira, 2 recortes, laudo periódico)
+python3 vigil_jetson.py --engine SUA_ENGINE.engine \
+  --camera csi --roi 704 --tiles 2 --esteira --laudo laudo.json
+
+# só enquadrar a CSI, com exposição automática (NUNCA para capturar dataset)
+python3 vigil_jetson.py --camera csi --quadrado --csi-sem-trava \
+  --engine SUA_ENGINE.engine
+
+--------------------------------------------------------------------------------
+ 7b. PRIMEIRA VEZ COM A CÂMERA CSI (IMX219)
+--------------------------------------------------------------------------------
+
+ !! DESLIGUE A JETSON ANTES DE PLUGAR O CABO !!
+    Plugar com a placa ligada pode queimar o sensor.
+
+ Orientação do flat:
+   - lado da Jetson : contatos metálicos virados para o DISSIPADOR
+   - lado da câmera : contatos virados para BAIXO (lado da PCB)
+   - trava do conector puxada antes de inserir, empurrada depois
+   - conector de 22 pinos (o de 15 é do Jetson Nano antigo, não serve)
+
+# diagnostica cabo, kernel, driver, GStreamer e OpenCV, e salva uma foto
+./setup_camera.sh
+
+# ver ao vivo (para enquadrar e ajustar o foco da lente)
+./setup_camera.sh --ver
+
+# --- nenhum /dev/video* ---
+# O LED do módulo indica se ele tem energia. Isso separa os dois casos:
+#
+#   LED ACESO   -> cabo OK; é DEVICE TREE (o Orin Nano Dev Kit vem sem
+#                  nenhuma câmera habilitada). Este é o caso comum.
+#   LED APAGADO -> é físico; replugue com a placa DESLIGADA
+
+sudo dmesg | grep -i -E 'imx219|nvcsi|vi5' | tail -20
+grep -i overlays /boot/extlinux/extlinux.conf
+ls /boot/*.dtbo 2>/dev/null | grep -i -E 'camera|imx'
+
+# habilitar o IMX219 no device tree
+#
+# O jetson-io NAO funciona no JetPack 6/7 (quebra com "No DTB found", porque o
+# DTB base passou a vir da partição e não do /boot). E só acrescentar OVERLAYS
+# no extlinux.conf não basta: o bootloader aplica ou descarta em silêncio.
+#
+# Use o script, que mescla o overlay no DTB com fdtoverlay e CONFERE que o nó
+# imx219 entrou ANTES de mexer no boot:
+
+sudo ./habilitar_camera.sh              # IMX219 no CAM0 (porta A)
+sudo ./habilitar_camera.sh imx219-C     # IMX219 no CAM1 (porta C)
+sudo reboot
+
+# QUAL sensor-id usar depende do OVERLAY, não do conector:
+#   overlay de câmera única (imx219-A ou -C) -> só existe o sensor 0
+#   overlay `dual`                            -> CAM0 = 0, CAM1 = 1
+# O setup_camera.sh testa 0 e 1 e diz qual respondeu. Use no app:
+#   --camera csi      (sensor 0)
+#   --camera csi:1    (sensor 1)
+
+# desfazer, se precisar
+sudo ./habilitar_camera.sh --desfazer
+
+# se o nvarguscamerasrc não abrir
+sudo systemctl restart nvargus-daemon && sleep 2
+
+--------------------------------------------------------------------------------
+ 8. QUANDO ALGO DÁ ERRADO
+--------------------------------------------------------------------------------
+
+# --- a câmera não abre ---
+ip -4 addr | grep inet                      # qual o IP do Jetson?
+curl -s --max-time 3 http://10.128.188.122:4747/video -o /tmp/t.bin; ls -lh /tmp/t.bin
+# alguns KB = funcionando.  HTTP 400 no curl -I também é NORMAL (DroidCam
+# só aceita GET); o que reprova é timeout ou "connection refused".
+
+# --- nenhuma detecção ---
+# 1. baixe a confiança:        --conf 0.05
+# 2. aproxime o celular (ver seção 3)
+# 3. teste num vídeo que sabidamente funciona:
+python3 vigil_jetson.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
+  --source teste_soja.mp4 --conf 0.10 --diag 100
+#    detectou no vídeo e não na câmera -> é enquadramento/domínio
+#    não detectou em nenhum dos dois   -> é a engine, me avise
+
+# --- reinstalar tudo do zero (cartão SD novo) ---
+cd ~/vigilia && ./setup_jetson.sh
+
+# --- reconstruir as engines (depois de atualizar o JetPack) ---
+rm -f *.engine && ./setup_jetson.sh
+
+# --- espaço em disco ---
+./check_espaco.sh
+df -h /
+
+# --- temperatura e consumo (jornada longa) ---
+sudo tegrastats
+
+--------------------------------------------------------------------------------
+ 9. O QUE DÁ E O QUE NÃO DÁ PRA CONCLUIR HOJE
+--------------------------------------------------------------------------------
+
+ VALE:      fps, latência, estabilidade de caixa e rastreamento,
+            e a comparação RELATIVA entre nano e small (o viés de domínio
+            atinge os dois igualmente).
+
+ NÃO VALE:  ler a taxa de acerto como acurácia da máquina. Celular na mão,
+            luz do ambiente e fundo qualquer são OUTRO DOMÍNIO — os modelos
+            foram treinados em fundo preto com luz difusa. Resultado fraco
+            aqui é esperado, e é exatamente o que a câmara padronizada
+            existe para resolver.
+
+================================================================================
