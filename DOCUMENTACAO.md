@@ -187,23 +187,39 @@ Scripts que substituem chute por conta, todos em `jetson/`:
 
 ### 4.5 Coleta de dataset — o laço de MLOps
 
-`jetson/coletar_dataset.py` fecha o ciclo entre o rig e o treino: passa-se uma
-bandeja de **uma classe por vez**, e sai a estrutura
-`dataset/pronto/{train,valid,test}/<classe>/` que o notebook de treino já lê.
+`jetson/coletar_dataset.py` traz para o rig o fluxo que o projeto já usava no
+`model/aprendizado_ativo.ipynb`: **o modelo propõe, a pessoa dispõe.**
 
-Três decisões definem a qualidade do que sai:
+Entra soja **misturada**, como ela cai na esteira. O detector acha os grãos no
+quadro multi-grão, rastreia, fecha a classe por voto (as mesmas regras do app ao
+vivo), recorta cada grão **pela caixa** e põe o recorte na pasta da classe que
+ele acha que é:
 
-- **O rótulo vem da bandeja, não do modelo.** Rotular com o modelo assaria os
-  erros dele dentro do dataset do próximo. A caixa sai do Otsu — o fundo preto
-  fosco torna a segmentação trivial — e a classe vem do lote que está passando.
-- **A divisão é por GRÃO FÍSICO, não por imagem.** Com rastreamento, um grão
+```
+dataset/revisar/
+    broken/  immature/  intact/  skin-damaged/  spotted/
+    descartar/      <- não é grão, está cortado, ou há dúvida
+```
+
+Corrigir é **arrastar arquivo entre pastas** num gerenciador com miniaturas, não
+editar planilha — e como a maioria já está certa, só se mexe no que o modelo
+errou. Depois, `--dividir` lê **onde cada arquivo ficou** (é a pasta que vale,
+não o nome) e monta `dataset/pronto/{train,valid,test}/<classe>/`.
+
+**O subproduto é o número que faltava.** O nome do arquivo guarda a classe que o
+modelo propôs, então a diferença entre proposta e pasta final é a **acurácia do
+modelo no rig, contra rótulo humano** — a medição que §2.3 lista como
+inexistente. Ela sai de graça do trabalho de anotar, e entra no `RELATORIO.md`
+com a matriz de confusão de quem foi corrigido para quê.
+
+Duas proteções que evitam erro silencioso:
+
+- **A divisão é por GRÃO FÍSICO, não por imagem.** Com rastreamento um grão
   aparece em ~11 quadros; dividir por imagem colocaria o mesmo grão no treino e
-  na validação, e a validação passaria a medir memorização. Aqui os recortes de
-  um grão caem sempre no mesmo split, e o script verifica a ausência de
-  vazamento antes de terminar.
-- **Recorte ruim não entra.** Grão cortado na borda, foto borrada e grãos
-  encostados são descartados na hora, com o motivo no relatório — se o descarte
-  passar do aproveitamento, o problema é o rig e o script diz qual é.
+  na validação, e a validação passaria a medir memorização. O script verifica a
+  ausência de vazamento antes de terminar.
+- **Recorte cortado na borda ou borrado não chega nem na revisão** — viraria
+  exemplo errado com rótulo confiante, que é o que o modelo aprende melhor.
 
 Captura feita **sem** as travas de exposição fica fora da divisão por padrão: é
 outro domínio, e misturar recriaria o gargalo que o rig existe para eliminar.

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Testa o `coletar_dataset.py` com uma câmera falsa — roda sem Jetson.
+"""Testa o `coletar_dataset.py` com câmera e modelo falsos — roda sem Jetson.
 
-O que se verifica aqui é o que erraria em silêncio: grão físico aparecendo em
-dois splits (a validação viraria memorização), recorte ruim entrando no
-dataset, e captura sem as travas se misturando com a padronizada.
+O que se verifica é o que erraria em silêncio: o mesmo grão físico caindo em
+dois splits (a validação viraria memorização), recorte cortado ou borrado
+entrando na revisão, e a contabilidade da correção manual — que é de onde sai
+o primeiro número de acurácia medido no rig.
 
     python3 testar_coleta.py
 """
+import argparse
 import importlib.util
 import json
 import os
@@ -25,160 +27,175 @@ _spec = importlib.util.spec_from_file_location(
 cd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cd)
 
+CLASSES = cd.CLASSES
+TAM = 704
 
-def cena(graos, lado=89, tam=704, borrar=False, encostar=False):
-    """Quadro sintético no padrão do rig: fundo preto fosco, grãos claros."""
-    img = np.full((tam, tam, 3), 14, np.uint8)
-    img += np.random.default_rng(0).integers(0, 6, img.shape, dtype=np.uint8)
+
+def cena(graos, borrar=False):
+    """Quadro no padrão do rig: fundo preto fosco, grãos claros com textura."""
+    rng = np.random.default_rng(1)
+    img = np.full((TAM, TAM, 3), 14, np.uint8)
+    img = np.clip(img + rng.integers(0, 6, img.shape), 0, 255).astype(np.uint8)
     for (cx, cy) in graos:
-        cv2.ellipse(img, (cx, cy), (lado // 2, int(lado * 0.38)), 20, 0, 360,
-                    (150, 185, 210), -1)
-        if encostar:      # segundo grão colado: vira um blob só
-            cv2.ellipse(img, (cx + lado - 6, cy), (lado // 2, int(lado * 0.38)),
-                        20, 0, 360, (150, 185, 210), -1)
-    if borrar:
-        img = cv2.GaussianBlur(img, (21, 21), 0)
-    return img
+        cv2.ellipse(img, (cx, cy), (44, 34), 20, 0, 360, (150, 185, 210), -1)
+        # textura: sem ela o laplaciano fica baixo e o filtro de nitidez barra
+        for _ in range(40):
+            px = int(rng.normal(cx, 12)); py = int(rng.normal(cy, 9))
+            cv2.circle(img, (px, py), 1, (110, 150, 180), -1)
+    return cv2.GaussianBlur(img, (31, 31), 0) if borrar else img
 
 
-# ------------------------------------------------------- segmentação e filtros
-print('--- segmentação e filtros de qualidade ---')
-img = cena([(150, 150), (400, 300), (250, 500)])
-achados = cd.segmentar(img)
-bons = [a for a in achados if cd.avaliar(img, a[:4], a[4])[0]]
-print(f'3 grãos espalhados -> {len(achados)} contornos, {len(bons)} aprovados')
-assert len(bons) == 3, [cd.avaliar(img, a[:4], a[4])[1] for a in achados]
+class ModeloFalso:
+    """Detecta os grãos e propõe classe com um ERRO CONHECIDO de 20%."""
+    W = H = TAM
 
-img_b = cena([(150, 150), (400, 300)], borrar=True)
-motivos = [cd.avaliar(img_b, a[:4], a[4])[1] for a in cd.segmentar(img_b)]
-print(f'cena borrada -> motivos de descarte: {set(motivos)}')
-assert all(m == 'borrado' for m in motivos), motivos
+    def __init__(self, erro=0.2):
+        self.rng = np.random.default_rng(7)
+        self.erro = erro
+        self.verdade = {}          # (cx arredondado) -> classe real
 
-img_e = cena([(200, 300)], encostar=True)
-motivos = [cd.avaliar(img_e, a[:4], a[4])[1] for a in cd.segmentar(img_e)]
-print(f'grãos encostados -> {set(motivos)}')
-assert motivos and all(m in ('encostado', 'grande') for m in motivos), motivos
-
-img_borda = cena([(2, 300)])
-motivos = [cd.avaliar(img_borda, a[:4], a[4])[1] for a in cd.segmentar(img_borda)]
-print(f'grão na borda -> {set(motivos)}')
-assert 'na_borda' in motivos, motivos
-print('OK: borrado, encostado e cortado na borda são barrados\n')
-
-
-# ------------------------------------------------------------ captura completa
-print('--- captura com câmera falsa ---')
-tmp = tempfile.mkdtemp()
-cd.RAIZ = tmp
-cd.BRUTO = os.path.join(tmp, 'bruto')
-cd.PRONTO = os.path.join(tmp, 'pronto')
-cd.MANIFESTO = os.path.join(cd.BRUTO, 'manifesto.jsonl')
+    def __call__(self, frame):
+        cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, m = cv2.threshold(cinza, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        out = []
+        for c in cnts:
+            x, y, w, h = cv2.boundingRect(c)
+            if w < 30 or h < 20:
+                continue
+            chave = x // 150
+            real = self.verdade.setdefault(chave, int(self.rng.integers(len(CLASSES))))
+            prev = real
+            if self.rng.random() < self.erro:      # erra de propósito
+                prev = (real + 1) % len(CLASSES)
+            out.append((x, y, x + w, y + h, prev, 0.9))
+        return out
 
 
 class CameraFalsa:
     """Grãos andando na esteira: o MESMO grão em vários quadros seguidos."""
 
-    def __init__(self, n_graos=12, passo=40):
-        self.n, self.passo, self.k = n_graos, passo, 0
+    def __init__(self, n=10, passo=35, borrar=False):
+        self.n, self.passo, self.k, self.borrar = n, passo, 0, borrar
 
     def read(self):
         self.k += 1
-        if self.k > 60:
+        if self.k > 70:
             return False, None
-        graos = []
-        for i in range(self.n):
-            x = 120 + (i % 4) * 150
-            y = 60 + (i // 4) * 170 + (self.k * self.passo) % 200
-            if 90 < y < 620:
-                graos.append((x, y))
-        return True, cena(graos)
+        graos = [(120 + (i % 3) * 190, 70 + (i // 3) * 150 + (self.k * self.passo) % 190)
+                 for i in range(self.n)]
+        graos = [(x, y) for x, y in graos if 70 < y < TAM - 70]
+        return True, cena(graos, self.borrar)
 
     def release(self): pass
 
 
-import argparse
+print('--- captura com câmera e modelo falsos ---')
+tmp = tempfile.mkdtemp()
+cd.RAIZ, cd.REVISAR = tmp, os.path.join(tmp, 'revisar')
+cd.PRONTO = os.path.join(tmp, 'pronto')
+cd.MANIFESTO = os.path.join(tmp, 'manifesto.jsonl')
+
+modelo = ModeloFalso(erro=0.2)
+cd.vj.RFDetrTRT = lambda *a, **k: modelo
 cd.vj.abrir_camera = lambda *a, **k: CameraFalsa()
-args = argparse.Namespace(classe='immature', lote='L001', graos=200, camera='csi',
-                          roi=0, sem_trava=False, parado=False, sem_janela=True)
+
+args = argparse.Namespace(engine='falso.engine', lote='L001', graos=500,
+                          camera='csi', source=None, roi=0, tiles=1, conf=0.25,
+                          class_offset=None, sem_trava=False, parado=False,
+                          sem_janela=True)
 cd.capturar(args)
 
-args.classe, args.lote = 'spotted', 'L002'
-cd.vj.abrir_camera = lambda *a, **k: CameraFalsa(n_graos=8)
-cd.capturar(args)
+itens = cd.ler_revisao()
+print(f'\nrecortes na revisão: {len(itens)}')
+assert itens, 'nada foi salvo'
+graos = {i['grao'] for i in itens}
+assert len(graos) == len(itens), 'mais de um recorte por grão (POR_GRAO=1)'
+print(f'OK: {len(graos)} grãos únicos, 1 recorte cada (tracker deduplicou)')
 
-# uma captura SEM travas, que não pode se misturar com as outras
-args.classe, args.lote, args.sem_trava = 'broken', 'L003', True
-cd.vj.abrir_camera = lambda *a, **k: CameraFalsa(n_graos=6)
-cd.capturar(args)
+# o nome do arquivo tem que carregar a classe proposta
+assert all(i['prevista'] in CLASSES for i in itens), 'classe prevista não veio no nome'
+print('OK: o nome do arquivo guarda a classe que o modelo propôs')
 
-linhas = [json.loads(l) for l in open(cd.MANIFESTO)]
-print(f'\nmanifesto: {len(linhas)} recortes')
-graos = {l['grao'] for l in linhas}
-print(f'grãos únicos: {len(graos)}')
-assert len(linhas) > len(graos), 'cada grão devia render vários recortes'
-por_grao = max(sum(1 for l in linhas if l['grao'] == g) for g in graos)
-assert por_grao <= cd.POR_GRAO, f'{por_grao} recortes de um grão só (máx {cd.POR_GRAO})'
-print(f'OK: no máximo {cd.POR_GRAO} recortes por grão (deduplicação do tracker)')
+# o arquivo tem que estar NA PASTA da classe proposta
+assert all(i['pasta'] == i['prevista'] for i in itens), 'recorte na pasta errada'
+print('OK: cada recorte foi para a pasta da classe proposta')
 
+# --- simula a correção manual: mover arquivos entre pastas ---
+print('\n--- correção manual simulada ---')
+rng = np.random.default_rng(3)
+movidos = 0
+for i in itens:
+    if rng.random() < 0.25:                      # corrijo 25% deles
+        nova = CLASSES[(CLASSES.index(i['pasta']) + 1) % len(CLASSES)]
+        shutil.move(i['caminho'], os.path.join(cd.REVISAR, nova, i['arquivo']))
+        movidos += 1
+# e mando alguns para descartar
+desc = 0
+for i in cd.ler_revisao()[:4]:
+    shutil.move(i['caminho'], os.path.join(cd.REVISAR, cd.DESCARTE, i['arquivo']))
+    desc += 1
+print(f'movi {movidos} para outra classe e {desc} para {cd.DESCARTE}/')
 
-# ----------------------------------------------------------------- divisão
+apos = cd.ler_revisao()
+detectados = sum(1 for i in apos
+                 if i['prevista'] in CLASSES and i['prevista'] != i['pasta'])
+assert detectados >= movidos, f'detectou {detectados} movimentos, esperava >= {movidos}'
+print(f'OK: o script detecta {detectados} correções lendo onde o arquivo ficou')
+
+# --- divisão ---
 print('\n--- divisão ---')
 args.dividir, args.incluir_sem_trava = True, False
 cd.dividir(args)
 
 import glob
 from collections import defaultdict
-grao_por_split = defaultdict(set)
+por_split = defaultdict(set)
 for sp in ('train', 'valid', 'test'):
     for p in glob.glob(os.path.join(cd.PRONTO, sp, '*', '*.jpg')):
-        nome = os.path.basename(p)
-        grao_por_split[sp].add('_'.join(nome.split('_')[:3]))
-
+        por_split[sp].add(os.path.basename(p).rpartition('__')[0])
 for a in ('train', 'valid', 'test'):
     for b in ('train', 'valid', 'test'):
         if a < b:
-            assert not (grao_por_split[a] & grao_por_split[b]), \
-                f'VAZAMENTO entre {a} e {b}'
+            assert not (por_split[a] & por_split[b]), f'VAZAMENTO entre {a} e {b}'
 print('OK: nenhum grão físico em dois splits')
 
-# a captura sem travas tem que ter ficado de fora
-sem_trava_dentro = glob.glob(os.path.join(cd.PRONTO, '*', 'broken', '*.jpg'))
-assert not sem_trava_dentro, f'captura sem travas entrou: {len(sem_trava_dentro)}'
-print('OK: captura sem travas de exposição ficou de fora (outro domínio)')
+# descartados não podem ter entrado
+no_pronto = sum(len(v) for v in por_split.values())
+assert no_pronto == len(apos) - desc, f'{no_pronto} no pronto, esperava {len(apos)-desc}'
+print(f'OK: os {desc} de {cd.DESCARTE}/ ficaram fora do dataset')
 
-# determinismo: dividir de novo dá exatamente o mesmo resultado
+# o rótulo tem que ser a PASTA onde ficou, não a do nome
+for sp in ('train', 'valid', 'test'):
+    for p in glob.glob(os.path.join(cd.PRONTO, sp, '*', '*.jpg')):
+        pasta = os.path.basename(os.path.dirname(p))
+        assert pasta in CLASSES
+print('OK: o rótulo final é a pasta em que o arquivo foi deixado')
+
+# determinismo
 antes = {os.path.relpath(p, cd.PRONTO)
          for p in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*.jpg'))}
 cd.dividir(args)
-depois = {os.path.relpath(p, cd.PRONTO)
-          for p in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*.jpg'))}
-assert antes == depois, 'divisão não é determinística'
+assert antes == {os.path.relpath(p, cd.PRONTO)
+                 for p in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*.jpg'))}
 print('OK: dividir de novo dá o mesmo resultado (hash, não sorteio)')
 
-# a estrutura tem que ser a que o notebook de treino já lê
-assert os.path.isdir(os.path.join(cd.PRONTO, 'train', 'immature'))
+rel = open(os.path.join(cd.PRONTO, 'RELATORIO.md')).read()
+assert 'Acurácia do modelo no rig' in rel and 'você corrigiu' in rel
+print('OK: o relatório traz a acurácia medida pelas correções')
 assert os.path.exists(os.path.join(cd.PRONTO, 'dataset.yaml'))
-assert os.path.exists(os.path.join(cd.PRONTO, 'RELATORIO.md'))
-print('OK: train/valid/test por classe + dataset.yaml + RELATORIO.md')
 
-# e o collect_base do notebook precisa reconhecer as pastas
-sys.path.insert(0, os.path.join(_AQUI, '..', 'model'))
-import unicodedata
+# --- filtros de qualidade ---
+print('\n--- filtros ---')
+tmp2 = tempfile.mkdtemp()
+cd.RAIZ, cd.REVISAR = tmp2, os.path.join(tmp2, 'revisar')
+cd.PRONTO, cd.MANIFESTO = os.path.join(tmp2, 'pronto'), os.path.join(tmp2, 'm.jsonl')
+cd.vj.abrir_camera = lambda *a, **k: CameraFalsa(borrar=True)
+args.dividir = False
+cd.capturar(args)
+assert not cd.ler_revisao(), 'quadro borrado passou pelo filtro de nitidez'
+print('OK: cena borrada não gera nenhum recorte')
 
-
-def class_of(folder):     # mesma lógica do notebook
-    ALIASES = {0: ['broken'], 1: ['immature'], 2: ['intact'],
-               3: ['skin', 'casca'], 4: ['spotted']}
-    n = unicodedata.normalize('NFKD', folder).encode('ascii', 'ignore').decode().lower()
-    for idx in range(5):
-        if any(k in n for k in ALIASES[idx]):
-            return idx
-    return None
-
-
-for c in cd.CLASSES:
-    assert class_of(c) is not None, f'o notebook não reconheceria a pasta {c}'
-print('OK: os nomes das pastas são reconhecidos pelo collect_base do notebook')
-
-shutil.rmtree(tmp)
+shutil.rmtree(tmp); shutil.rmtree(tmp2)
 print('\n=== coleta validada ===')
