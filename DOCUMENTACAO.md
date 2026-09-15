@@ -61,7 +61,46 @@ O que decide se o MVP presta **não é mAP**, é:
 Os dois primeiros exigem um conjunto de validação anotado à mão no próprio
 rig; hoje ele **não existe** (ver §7).
 
-### 2.4 Posição honesta de mercado
+### 2.4 Licenças — o que pode ser vendido
+
+Para um produto que vai ser vendido, a licença do backbone é requisito, não
+detalhe. Verificado nos repositórios e no PyPI:
+
+| Projeto | Licença | Vendável |
+|---|---|---|
+| **Ultralytics** (YOLOv5 / v8 / v11) | **AGPL-3.0** | ❌ só com licença enterprise paga |
+| **RF-DETR** (Roboflow) | **Apache 2.0** | ✅ |
+| D-FINE · DEIM | Apache 2.0 | ✅ |
+| YOLOX (Megvii) | Apache 2.0 | ✅ |
+| RT-DETR (repositório original, `lyuwenyu`) | Apache 2.0 | ✅ |
+| RTMDet (mmdetection) | Apache 2.0 | ✅ |
+
+**A frente do MVP está limpa.** O RF-DETR é Apache 2.0 nas variantes
+Nano/Small/Medium/Large — as que o projeto usa. (Só XL/2XL ficam sob licença
+restritiva, e não entram aqui.) Jetson, câmara, esteira e laudo não têm
+exposição.
+
+**A exposição está no site.** O `soja_yolo11s_finetuned.pt` em produção é
+Ultralytics, ou seja AGPL-3.0 — e a AGPL alcança serviço em rede: oferecer
+inferência pela web conta como distribuição e obriga a abrir o código de tudo
+que integra. Se o produto vendido incluir o site, isso precisa ser resolvido
+antes, não depois. Saídas, em ordem de esforço: retreinar o modo foto com
+backbone Apache, servir o modo foto pelo próprio detector do rig (que já
+classifica), ou manter o site como demo acadêmica e vender só o equipamento.
+
+**A armadilha:** mesma arquitetura, implementação diferente, licença diferente.
+RT-DETR do repositório original é Apache 2.0; **rodado pelo Ultralytics é
+AGPL**, porque o código é deles — e o mesmo vale para YOLOv10 e outros
+reimplementados lá dentro. Qualquer `from ultralytics import …` é AGPL,
+independente do modelo.
+
+Os **pesos pré-treinados** têm licença própria, separada do código. Treinar do
+zero no dataset do rig elimina essa camada por completo.
+
+> Isto é levantamento técnico das licenças, não parecer jurídico. Antes de
+> vender, vale confirmar com quem responda por isso.
+
+### 2.5 Posição honesta de mercado
 
 0,5 t/dia em 15 h são **~33 kg/h**. Uma classificadora mecânica de
 R$ 5.000–7.500 é especificada em **t/h** — uma a duas ordens de grandeza acima.
@@ -392,6 +431,9 @@ qualquer captura própria.
 
 ### Fora do MVP (registrado, não priorizado)
 
+- Resolver a exposição AGPL do site antes de qualquer venda que o inclua —
+  o `soja_yolo11s_finetuned.pt` é Ultralytics (ver §2.4). Não bloqueia o MVP
+  do rig, que já é Apache 2.0 ponta a ponta.
 - Ejeção física (fase 2 do produto)
 - Sensor espectral (AS7265x) com fusão por *cross-attention* — só faz sentido
   se o RGB puro empacar depois da Fase 4; hoje seria complexidade prematura
