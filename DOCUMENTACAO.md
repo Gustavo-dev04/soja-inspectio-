@@ -100,6 +100,13 @@ zero no dataset do rig elimina essa camada por completo.
 > Isto é levantamento técnico das licenças, não parecer jurídico. Antes de
 > vender, vale confirmar com quem responda por isso.
 
+Levantamento completo — licença conferida arquivo por arquivo, mais o qps
+projetado de cada candidato **neste Jetson** — em
+[`PESQUISA_BACKBONES.md`](PESQUISA_BACKBONES.md). Resumo: a escolha atual
+(RF-DETR-L) se confirma, e as duas armadilhas que aparecem lá são o **DEIMv2**
+(licença não-comercial, apesar da métrica excelente) e o **RF-DETR-XL/2XL**
+(PML 1.0 — o nome da família não carrega a licença, a variante é que carrega).
+
 ### 2.5 Posição honesta de mercado
 
 0,5 t/dia em 15 h são **~33 kg/h**. Uma classificadora mecânica de
@@ -223,6 +230,7 @@ Scripts que substituem chute por conta, todos em `jetson/`:
 | `testar_esteira.py` | roda no PC, sem Jetson nem câmera: valida rastreamento, recortes e contabilidade |
 | `coletar_dataset.py` | entra soja, sai dataset dividido em train/valid/test — ver §4.5 |
 | `bench_energia.py` | quantos watts e quantos graus, ocioso e sob carga |
+| `projetar_qps.py` | qual backbone dá quantos qps neste aparelho, e quanto isso vira de kg/h |
 
 ### 4.5 Coleta de dataset — o laço de MLOps
 
@@ -423,6 +431,12 @@ qualquer captura própria.
 
 ### Fase 6 — Otimização *(só se pagar)*
 
+- [ ] Medir o modo **MAXN_SUPER** (`nvpmodel`). Sobe o clock da GPU de 635 para
+      1020 MHz — teto de 1,6× sem trocar modelo nem retreinar, e é o ganho mais
+      barato disponível. Custa ~1,7× de potência. **Medir dentro da câmara
+      fechada**, não na bancada: a 15 W sobravam 39 °C de margem térmica, a 25 W
+      essa margem encolhe e o throttling só aparece no teste longo, que é o
+      regime real de 14–16 h/dia. Ver `PESQUISA_BACKBONES.md` §7.
 - [ ] Avaliar **INT8**. ⚠️ **Não assumir que é mais rápido:** há relato de
       regressão de 2,7× com INT8 num ViT-S no Orin Nano — e o backbone do
       RF-DETR Large é exatamente um ViT-S. A/B obrigatório contra FP16, medindo
@@ -572,6 +586,7 @@ defensável de um que cai no primeiro questionamento.
 
 ```
 DOCUMENTACAO.md                este documento
+PESQUISA_BACKBONES.md          backbones vendáveis: licença + qps projetado no Jetson
 CONTEXTO_PROJETO.md            contexto bruto e completo (fonte deste documento)
 CLAUDE.md                      instruções de projeto para assistente de código
 
@@ -581,6 +596,7 @@ jetson/                        ── a frente do MVP ──
   calcular_optica.py           lente + distância → pixels por grão
   calcular_vazao.py            câmara + recortes + fps → velocidade máx e kg/h
   calibrar_rig.py              medição com régua: px/mm e exposição
+  projetar_qps.py              backbone → qps no aparelho → kg/h no rig
   testar_esteira.py            testes que rodam no PC, sem Jetson nem câmera
   bench_trt.sh                 benchmark da engine no aparelho
   README.md                    guia de ONNX → engine → app

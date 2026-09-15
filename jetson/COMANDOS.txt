@@ -243,6 +243,34 @@ python3 coletar_dataset.py --exportar
  fora da exportação por padrão.
 
 --------------------------------------------------------------------------------
+ 7d. MODO DE ENERGIA E ESCOLHA DE BACKBONE
+--------------------------------------------------------------------------------
+
+# quantos qps cada backbone candidato dá NESTE aparelho, e quanto vira de kg/h
+python3 projetar_qps.py
+python3 projetar_qps.py --vazao
+python3 projetar_qps.py --modo super
+
+# depois de medir de verdade, realimente a projecao (ela se reajusta sozinha):
+python3 projetar_qps.py --medido RF-DETR-L=30.1 --vazao
+
+# --- MAXN_SUPER: ate 1,6x de graca, sem trocar modelo ---
+sudo nvpmodel -q                  # quais modos este aparelho oferece
+sudo nvpmodel -m 2                # MAXN_SUPER (CONFIRA o numero no -q acima)
+sudo jetson_clocks                # trava nos clocks maximos
+sudo reboot                       # alguns modos so valem apos reiniciar
+
+# medir o ganho real (o 1,6x e TETO de clock, o real e menor)
+python3 bench_energia.py --engine SUA_ENGINE.engine --minutos 30
+
+ !! Meça DENTRO da camara fechada, nao na bancada. A 15 W sobravam 39 C de
+    margem termica; a 25 W ela encolhe, e o throttling so aparece no teste
+    longo -- que e o regime real de 14-16 h/dia.
+
+# voltar para 15 W se esquentar demais
+sudo nvpmodel -m 1                # confira o numero no -q
+
+--------------------------------------------------------------------------------
  8. QUANDO ALGO DÁ ERRADO
 --------------------------------------------------------------------------------
 
