@@ -19,6 +19,7 @@ import types
 
 import cv2
 import numpy as np
+from collections import Counter
 
 _AQUI = os.path.dirname(os.path.abspath(__file__))
 sys.modules.setdefault('tensorrt', types.ModuleType('tensorrt'))
@@ -94,8 +95,7 @@ class CameraFalsa:
 print('--- captura com câmera e modelo falsos ---')
 tmp = tempfile.mkdtemp()
 cd.RAIZ, cd.REVISAR = tmp, os.path.join(tmp, 'revisar')
-cd.PRONTO = os.path.join(tmp, 'pronto')
-cd.MANIFESTO = os.path.join(tmp, 'manifesto.jsonl')
+cd.PRONTO, cd.QUADROS = os.path.join(tmp, 'pronto'), os.path.join(tmp, 'quadros')
 
 modelo = ModeloFalso(erro=0.2)
 cd.vj.RFDetrTRT = lambda *a, **k: modelo
@@ -104,95 +104,139 @@ cd.vj.abrir_camera = lambda *a, **k: CameraFalsa()
 args = argparse.Namespace(engine='falso.engine', lote='L001', graos=500,
                           camera='csi', source=None, roi=0, tiles=1, conf=0.25,
                           class_offset=None, sem_trava=False, parado=False,
-                          sem_janela=True)
+                          sem_janela=True, passo=2, bloco=2.0, guarda=0.3)
 cd.capturar(args)
 
-itens = cd.ler_revisao()
-print(f'\nrecortes na revisão: {len(itens)}')
-assert itens, 'nada foi salvo'
-graos = {i['grao'] for i in itens}
-assert len(graos) == len(itens), 'mais de um recorte por grão (POR_GRAO=1)'
-print(f'OK: {len(graos)} grãos únicos, 1 recorte cada (tracker deduplicou)')
+revisao = cd.ler_revisao()
+print(f'\ngrãos na revisão: {len(revisao)}')
+assert revisao, 'nada foi salvo para revisar'
+assert all(r['prevista'] in CLASSES for r in revisao.values()), \
+    'a classe proposta não veio no nome do arquivo'
+assert all(r['prevista'] == r['corrigida'] for r in revisao.values()), \
+    'recorte foi parar em pasta diferente da proposta'
+print('OK: um recorte por grão, na pasta da classe proposta, com a proposta no nome')
 
-# o nome do arquivo tem que carregar a classe proposta
-assert all(i['prevista'] in CLASSES for i in itens), 'classe prevista não veio no nome'
-print('OK: o nome do arquivo guarda a classe que o modelo propôs')
-
-# o arquivo tem que estar NA PASTA da classe proposta
-assert all(i['pasta'] == i['prevista'] for i in itens), 'recorte na pasta errada'
-print('OK: cada recorte foi para a pasta da classe proposta')
+# os QUADROS inteiros também têm que estar salvos, com as caixas
+sessoes = cd._sessoes()
+assert sessoes, 'nenhuma sessão de quadros salva'
+_, meta = sessoes[0]
+nq = len(meta['quadros'])
+nc = sum(len(q['caixas']) for q in meta['quadros'])
+print(f'OK: {nq} quadros inteiros salvos com {nc} caixas (dataset de detecção)')
+assert nq > 0 and nc > nq, 'esperava várias caixas por quadro (cena multi-grão)'
+assert meta['quadros'][0]['largura'] == TAM
+# o mesmo grão tem que aparecer em VÁRIOS quadros — é o que faz a correção render
+vezes = Counter(c['grao'] for q in meta['quadros'] for c in q['caixas'])
+assert max(vezes.values()) > 1, 'nenhum grão apareceu em mais de um quadro'
+print(f'OK: um grão aparece em até {max(vezes.values())} quadros — '
+      f'corrigir 1 recorte acerta {max(vezes.values())} caixas')
 
 # --- simula a correção manual: mover arquivos entre pastas ---
 print('\n--- correção manual simulada ---')
 rng = np.random.default_rng(3)
 movidos = 0
-for i in itens:
-    if rng.random() < 0.25:                      # corrijo 25% deles
-        nova = CLASSES[(CLASSES.index(i['pasta']) + 1) % len(CLASSES)]
-        shutil.move(i['caminho'], os.path.join(cd.REVISAR, nova, i['arquivo']))
+for grao, r in list(revisao.items()):
+    origem = os.path.join(cd.REVISAR, r['corrigida'], f"{grao}__{r['prevista']}.jpg")
+    if rng.random() < 0.25:
+        nova = CLASSES[(CLASSES.index(r['corrigida']) + 1) % len(CLASSES)]
+        shutil.move(origem, os.path.join(cd.REVISAR, nova, os.path.basename(origem)))
         movidos += 1
-# e mando alguns para descartar
 desc = 0
-for i in cd.ler_revisao()[:4]:
-    shutil.move(i['caminho'], os.path.join(cd.REVISAR, cd.DESCARTE, i['arquivo']))
-    desc += 1
+for grao, r in list(cd.ler_revisao().items())[:3]:
+    origem = os.path.join(cd.REVISAR, r['corrigida'], f"{grao}__{r['prevista']}.jpg")
+    if os.path.exists(origem):
+        shutil.move(origem, os.path.join(cd.REVISAR, cd.DESCARTE,
+                                         os.path.basename(origem)))
+        desc += 1
 print(f'movi {movidos} para outra classe e {desc} para {cd.DESCARTE}/')
 
 apos = cd.ler_revisao()
-detectados = sum(1 for i in apos
-                 if i['prevista'] in CLASSES and i['prevista'] != i['pasta'])
-assert detectados >= movidos, f'detectou {detectados} movimentos, esperava >= {movidos}'
+detectados = sum(1 for r in apos.values()
+                 if r['prevista'] in CLASSES and r['prevista'] != r['corrigida'])
+assert detectados >= movidos, f'detectou {detectados}, esperava >= {movidos}'
 print(f'OK: o script detecta {detectados} correções lendo onde o arquivo ficou')
 
-# --- divisão ---
-print('\n--- divisão ---')
-args.dividir, args.incluir_sem_trava = True, False
-cd.dividir(args)
+# --- exportação ---
+print('\n--- exportação (YOLO + COCO) ---')
+args.exportar, args.incluir_sem_trava = True, False
+cd.exportar(args)
 
 import glob
 from collections import defaultdict
-por_split = defaultdict(set)
+graos_split = defaultdict(set)
 for sp in ('train', 'valid', 'test'):
-    for p in glob.glob(os.path.join(cd.PRONTO, sp, '*', '*.jpg')):
-        por_split[sp].add(os.path.basename(p).rpartition('__')[0])
+    for p_ in glob.glob(os.path.join(cd.PRONTO, sp, 'labels', '*.txt')):
+        nome = os.path.basename(p_)[:-4] + '.jpg'
+        for _, m in cd._sessoes():
+            for q in m['quadros']:
+                if q['arquivo'] == nome:
+                    graos_split[sp] |= {c['grao'] for c in q['caixas']}
 for a in ('train', 'valid', 'test'):
     for b in ('train', 'valid', 'test'):
         if a < b:
-            assert not (por_split[a] & por_split[b]), f'VAZAMENTO entre {a} e {b}'
-print('OK: nenhum grão físico em dois splits')
+            assert not (graos_split[a] & graos_split[b]), f'VAZAMENTO entre {a} e {b}'
+print('OK: nenhum grão físico em dois splits (divisão por bloco + banda de guarda)')
 
-# descartados não podem ter entrado
-no_pronto = sum(len(v) for v in por_split.values())
-assert no_pronto == len(apos) - desc, f'{no_pronto} no pronto, esperava {len(apos)-desc}'
-print(f'OK: os {desc} de {cd.DESCARTE}/ ficaram fora do dataset')
-
-# o rótulo tem que ser a PASTA onde ficou, não a do nome
+# YOLO: rótulo normalizado, classe dentro da faixa, e é a classe CORRIGIDA
+n_caixas = 0
 for sp in ('train', 'valid', 'test'):
-    for p in glob.glob(os.path.join(cd.PRONTO, sp, '*', '*.jpg')):
-        pasta = os.path.basename(os.path.dirname(p))
-        assert pasta in CLASSES
-print('OK: o rótulo final é a pasta em que o arquivo foi deixado')
+    for p_ in glob.glob(os.path.join(cd.PRONTO, sp, 'labels', '*.txt')):
+        for linha in open(p_).read().splitlines():
+            ci, cx, cy, w_, h_ = linha.split()
+            assert 0 <= int(ci) < len(CLASSES)
+            assert all(0 <= float(v) <= 1 for v in (cx, cy, w_, h_)), linha
+            n_caixas += 1
+        assert os.path.exists(os.path.join(cd.PRONTO, sp, 'images',
+                                           os.path.basename(p_)[:-4] + '.jpg'))
+print(f'OK: {n_caixas} rótulos YOLO normalizados, cada um com sua imagem')
+
+# COCO: mesmo conteúdo, em pixels
+tot_coco = 0
+for sp in ('train', 'valid', 'test'):
+    c = json.load(open(os.path.join(cd.PRONTO, sp, '_annotations.coco.json')))
+    assert [k['name'] for k in c['categories']] == CLASSES
+    for a_ in c['annotations']:
+        assert 1 <= a_['category_id'] <= len(CLASSES)
+        assert a_['bbox'][2] > 1 and a_['bbox'][3] > 1
+    tot_coco += len(c['annotations'])
+assert tot_coco == n_caixas, f'COCO {tot_coco} x YOLO {n_caixas}'
+print(f'OK: COCO com as mesmas {tot_coco} caixas, em pixels')
+
+# o grão descartado não pode ter deixado caixa em lugar nenhum
+descartados = {g for g, r in apos.items() if r['corrigida'] == cd.DESCARTE}
+for sp in ('train', 'valid', 'test'):
+    for p_ in glob.glob(os.path.join(cd.PRONTO, sp, 'labels', '*.txt')):
+        nome = os.path.basename(p_)[:-4] + '.jpg'
+        for _, m in cd._sessoes():
+            for q in m['quadros']:
+                if q['arquivo'] == nome:
+                    presentes = {c['grao'] for c in q['caixas']}
+                    n_esperado = len(presentes - descartados
+                                     - {g for g in presentes if g not in apos})
+                    n_real = len(open(p_).read().splitlines())
+                    assert n_real == n_esperado, (nome, n_real, n_esperado)
+print(f'OK: as caixas dos {len(descartados)} grãos descartados sumiram das anotações')
 
 # determinismo
-antes = {os.path.relpath(p, cd.PRONTO)
-         for p in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*.jpg'))}
-cd.dividir(args)
-assert antes == {os.path.relpath(p, cd.PRONTO)
-                 for p in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*.jpg'))}
-print('OK: dividir de novo dá o mesmo resultado (hash, não sorteio)')
+antes = {os.path.relpath(p_, cd.PRONTO)
+         for p_ in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*'))}
+cd.exportar(args)
+assert antes == {os.path.relpath(p_, cd.PRONTO)
+                 for p_ in glob.glob(os.path.join(cd.PRONTO, '*', '*', '*'))}
+print('OK: exportar de novo dá o mesmo resultado (hash, não sorteio)')
 
 rel = open(os.path.join(cd.PRONTO, 'RELATORIO.md')).read()
-assert 'Acurácia do modelo no rig' in rel and 'você corrigiu' in rel
-print('OK: o relatório traz a acurácia medida pelas correções')
+assert 'Acurácia do modelo atual no rig' in rel
 assert os.path.exists(os.path.join(cd.PRONTO, 'dataset.yaml'))
+print('OK: RELATORIO.md com a acurácia medida + dataset.yaml')
 
 # --- filtros de qualidade ---
 print('\n--- filtros ---')
 tmp2 = tempfile.mkdtemp()
 cd.RAIZ, cd.REVISAR = tmp2, os.path.join(tmp2, 'revisar')
-cd.PRONTO, cd.MANIFESTO = os.path.join(tmp2, 'pronto'), os.path.join(tmp2, 'm.jsonl')
+cd.PRONTO, cd.QUADROS = os.path.join(tmp2, 'pronto'), os.path.join(tmp2, 'quadros')
 cd.vj.abrir_camera = lambda *a, **k: CameraFalsa(borrar=True)
-args.dividir = False
+args.exportar = False
 cd.capturar(args)
 assert not cd.ler_revisao(), 'quadro borrado passou pelo filtro de nitidez'
 print('OK: cena borrada não gera nenhum recorte')

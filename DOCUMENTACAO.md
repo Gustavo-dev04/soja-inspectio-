@@ -187,42 +187,49 @@ Scripts que substituem chute por conta, todos em `jetson/`:
 
 ### 4.5 Coleta de dataset — o laço de MLOps
 
-`jetson/coletar_dataset.py` traz para o rig o fluxo que o projeto já usava no
-`model/aprendizado_ativo.ipynb`: **o modelo propõe, a pessoa dispõe.**
+`jetson/coletar_dataset.py` produz o dataset de **detecção** com que um modelo
+novo será treinado **do zero**, no domínio do rig.
 
-Entra soja **misturada**, como ela cai na esteira. O detector acha os grãos no
-quadro multi-grão, rastreia, fecha a classe por voto (as mesmas regras do app ao
-vivo), recorta cada grão **pela caixa** e põe o recorte na pasta da classe que
-ele acha que é:
+Entra soja **misturada**, como cai na esteira. O detector atual acha os grãos,
+rastreia e fecha a classe por voto — as mesmas regras do app ao vivo. O script
+guarda **duas coisas**:
+
+- **o quadro inteiro com todas as caixas**, que é o que treina detector. Recorte
+  solto só treina classificador: o detector precisa aprender *onde* o grão está,
+  quantos existem no quadro e como se encostam, e isso só está na cena. O
+  pipeline antigo montava cenas sintéticas justamente porque só tinha foto de um
+  grão por imagem; o rig entrega cena densa **real**, com fundo e oclusão reais.
+- **um recorte por grão**, na pasta da classe proposta, para a revisão humana.
+
+Corrigir é **arrastar arquivo entre pastas**. E como o rastreamento liga o
+recorte a todas as caixas daquele grão, **uma correção acerta dezenas de
+anotações** — nos testes, até 10 caixas por arquivo movido.
+
+`--exportar` gera YOLO e COCO do mesmo dado, então a escolha do modelo fica em
+aberto:
 
 ```
-dataset/revisar/
-    broken/  immature/  intact/  skin-damaged/  spotted/
-    descartar/      <- não é grão, está cortado, ou há dúvida
+dataset/pronto/<split>/images/*.jpg + labels/*.txt   (YOLO)
+dataset/pronto/<split>/_annotations.coco.json        (COCO)
 ```
 
-Corrigir é **arrastar arquivo entre pastas** num gerenciador com miniaturas, não
-editar planilha — e como a maioria já está certa, só se mexe no que o modelo
-errou. Depois, `--dividir` lê **onde cada arquivo ficou** (é a pasta que vale,
-não o nome) e monta `dataset/pronto/{train,valid,test}/<classe>/`.
+**O subproduto é o número que faltava.** O nome do arquivo guarda a classe
+proposta e a pasta guarda a corrigida, então a diferença é a **acurácia do
+modelo atual no rig, contra rótulo humano** — a medição que §2.3 lista como
+inexistente, e a linha de base que o modelo novo precisa bater.
 
-**O subproduto é o número que faltava.** O nome do arquivo guarda a classe que o
-modelo propôs, então a diferença entre proposta e pasta final é a **acurácia do
-modelo no rig, contra rótulo humano** — a medição que §2.3 lista como
-inexistente. Ela sai de graça do trabalho de anotar, e entra no `RELATORIO.md`
-com a matriz de confusão de quem foi corrigido para quê.
+Duas proteções contra erro silencioso:
 
-Duas proteções que evitam erro silencioso:
+- **Divisão por bloco de tempo, com banda de guarda.** Quadros consecutivos da
+  esteira são quase idênticos (o grão anda ~4 mm entre varreduras); dividir por
+  quadro poria praticamente a mesma imagem no treino e na validação. Blocos
+  inteiros vão juntos, a banda de guarda é maior que a travessia de um grão, e a
+  exportação verifica a ausência de vazamento antes de terminar.
+- **Grão cortado na borda não vira anotação**, e recorte borrado não chega à
+  revisão — ensinariam o detector a chamar meio grão de grão inteiro.
 
-- **A divisão é por GRÃO FÍSICO, não por imagem.** Com rastreamento um grão
-  aparece em ~11 quadros; dividir por imagem colocaria o mesmo grão no treino e
-  na validação, e a validação passaria a medir memorização. O script verifica a
-  ausência de vazamento antes de terminar.
-- **Recorte cortado na borda ou borrado não chega nem na revisão** — viraria
-  exemplo errado com rótulo confiante, que é o que o modelo aprende melhor.
-
-Captura feita **sem** as travas de exposição fica fora da divisão por padrão: é
-outro domínio, e misturar recriaria o gargalo que o rig existe para eliminar.
+Captura feita **sem** as travas de exposição fica fora da exportação por padrão:
+é outro domínio.
 
 ---
 

@@ -198,49 +198,49 @@ sudo ./habilitar_camera.sh --desfazer
 sudo systemctl restart nvargus-daemon && sleep 2
 
 --------------------------------------------------------------------------------
- 7c. COLETAR DATASET  (o modelo propõe, você corrige)
+ 7c. COLETAR DATASET DE DETECÇÃO  (para treinar um modelo DO ZERO)
 --------------------------------------------------------------------------------
 
- Soja MISTURADA, como ela cai na esteira. O detector acha os grãos, fecha a
- classe por voto, recorta pela caixa e joga o recorte na pasta da classe que
- ele acha que é. Você depois arrasta o que estiver errado.
+ Soja MISTURADA, como cai na esteira. Guarda o QUADRO INTEIRO com as caixas
+ (é isso que treina detector; recorte solto só treina classificador) e um
+ recorte por grão para você revisar.
 
 # 1. CAPTURAR
 python3 coletar_dataset.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
   --camera csi --roi 704 --tiles 2 --lote L001
 
-# bandeja parada (sem esteira)
-python3 coletar_dataset.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
-  --camera csi --roi 704 --lote L001 --parado
-
-# a partir de um vídeo já gravado
-python3 coletar_dataset.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
-  --source lote.mp4 --lote L001
+# bandeja parada / vídeo gravado
+python3 coletar_dataset.py --engine X.engine --camera csi --roi 704 --parado
+python3 coletar_dataset.py --engine X.engine --source lote.mp4
 
 # 2. CORRIGIR À MÃO  (a única parte manual)
-#    abra dataset/revisar/ no gerenciador de arquivos, ligue miniaturas
-#    grandes, e arraste o que estiver na pasta errada.
-#      broken/ immature/ intact/ skin-damaged/ spotted/
-#      descartar/   <- não é grão, está cortado, ou você está em dúvida
-#    A maioria já vai estar certa: você só mexe no que o modelo errou.
+#    abra dataset/revisar/, ligue miniaturas grandes, arraste o errado.
+#      broken/ immature/ intact/ skin-damaged/ spotted/  descartar/
+#    Você corrige UM recorte por grão e a correção vale para TODAS as caixas
+#    dele, em todos os quadros — um arquivo movido acerta dezenas de anotações.
 
-# 3. quanto já foi revisado
+# 3. quanto já foi capturado e revisado
 python3 coletar_dataset.py --status
 
-# 4. DIVIDIR  (por GRÃO, sem vazamento entre splits)
-python3 coletar_dataset.py --dividir
+# 4. EXPORTAR em YOLO + COCO, dividido sem vazamento
+python3 coletar_dataset.py --exportar
 
- Sai em:  dataset/pronto/{train,valid,test}/<classe>/*.jpg
-          dataset/pronto/RELATORIO.md   <- inclui a ACURÁCIA DO MODELO NO RIG,
-                                           medida pelas suas correções
+ Sai em:  dataset/pronto/<split>/images/*.jpg + labels/*.txt   (YOLO)
+          dataset/pronto/<split>/_annotations.coco.json        (COCO)
           dataset/pronto/dataset.yaml
+          dataset/pronto/RELATORIO.md  <- inclui a ACURÁCIA DO MODELO ATUAL
+                                          no rig, medida pelas suas correções
 
- O rótulo final é a PASTA em que você deixou o arquivo, não a do nome.
- O nome guarda o que o modelo tinha proposto — é assim que ele mede quanto
- você corrigiu.
+ Os dois formatos saem do mesmo dado: treine com o modelo que quiser.
+
+ AJUSTES úteis:
+   --passo 6     1 quadro a cada 6 varreduras (quadros seguidos são iguais)
+   --bloco 20    tamanho do bloco de tempo usado na divisão (segundos)
+   --guarda 3    banda de guarda entre blocos (segundos)
+   --conf 0.25   confiança baixa de propósito: você filtra na revisão
 
  CUIDADO: capturar com --sem-trava gera dado de OUTRO domínio, e ele fica
- fora da divisão por padrão.
+ fora da exportação por padrão.
 
 --------------------------------------------------------------------------------
  8. QUANDO ALGO DÁ ERRADO
