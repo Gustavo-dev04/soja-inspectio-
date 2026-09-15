@@ -174,7 +174,7 @@ falha dominante em vídeo.
 
 ### 4.4 Ferramentas de dimensionamento do rig
 
-Três scripts que substituem chute por conta, todos em `jetson/`:
+Scripts que substituem chute por conta, todos em `jetson/`:
 
 | Script | Responde |
 |---|---|
@@ -182,6 +182,31 @@ Três scripts que substituem chute por conta, todos em `jetson/`:
 | `calcular_vazao.py` | essa configuração de câmara entrega a vazão alvo? qual a velocidade máxima da esteira? |
 | `calibrar_rig.py` | quantos px/mm o rig entrega *de verdade* (com régua) e a exposição está boa? |
 | `testar_esteira.py` | roda no PC, sem Jetson nem câmera: valida rastreamento, recortes e contabilidade |
+| `coletar_dataset.py` | entra soja, sai dataset dividido em train/valid/test — ver §4.5 |
+| `bench_energia.py` | quantos watts e quantos graus, ocioso e sob carga |
+
+### 4.5 Coleta de dataset — o laço de MLOps
+
+`jetson/coletar_dataset.py` fecha o ciclo entre o rig e o treino: passa-se uma
+bandeja de **uma classe por vez**, e sai a estrutura
+`dataset/pronto/{train,valid,test}/<classe>/` que o notebook de treino já lê.
+
+Três decisões definem a qualidade do que sai:
+
+- **O rótulo vem da bandeja, não do modelo.** Rotular com o modelo assaria os
+  erros dele dentro do dataset do próximo. A caixa sai do Otsu — o fundo preto
+  fosco torna a segmentação trivial — e a classe vem do lote que está passando.
+- **A divisão é por GRÃO FÍSICO, não por imagem.** Com rastreamento, um grão
+  aparece em ~11 quadros; dividir por imagem colocaria o mesmo grão no treino e
+  na validação, e a validação passaria a medir memorização. Aqui os recortes de
+  um grão caem sempre no mesmo split, e o script verifica a ausência de
+  vazamento antes de terminar.
+- **Recorte ruim não entra.** Grão cortado na borda, foto borrada e grãos
+  encostados são descartados na hora, com o motivo no relatório — se o descarte
+  passar do aproveitamento, o problema é o rig e o script diz qual é.
+
+Captura feita **sem** as travas de exposição fica fora da divisão por padrão: é
+outro domínio, e misturar recriaria o gargalo que o rig existe para eliminar.
 
 ---
 

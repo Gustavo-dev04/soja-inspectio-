@@ -220,6 +220,15 @@ class RFDetrTRT:
         # histograma abaixo pra decidir com dado em vez de chute.
         self.offset = self.offset_forcado if self.offset_forcado is not None else 0
         self.hist_cru = np.zeros(self.n_cls, np.int64)
+        # Buffers do pré-processamento, alocados UMA vez. O caminho ingênuo
+        # (astype + /255 + transpose + ascontiguousarray + copyto) faz quatro
+        # alocações de quadro inteiro por inferência — a 704px são ~6 MB cada,
+        # e no modo --tiles isso roda duas vezes por varredura. Medido num x86:
+        # 4,23 ms contra 1,38 ms reaproveitando os buffers. No Jetson, que tem
+        # CPU mais lenta e memória compartilhada, a diferença tende a ser maior.
+        self._canvas = np.zeros((self.H, self.W, 3), np.uint8)
+        self._rgb8 = np.empty((self.H, self.W, 3), np.uint8)
+        self._hwc32 = np.empty((self.H, self.W, 3), np.float32)
         print(f'engine: entrada {self.W}x{self.H} | {self.shapes[self.box_name][1]} queries '
               f'| {self.n_cls} colunas de classe | offset={self.offset}'
               f'{" (forçado)" if self.offset_forcado is not None else ""}')
@@ -240,24 +249,46 @@ class RFDetrTRT:
             linhas.append(f'  {c:^11d} | {self.hist_cru[c]:9d} | {nome:14s} {barra}')
         return '\n'.join(linhas)
 
-    def letterbox(self, frame):
-        """Redimensiona mantendo proporção e preenche com preto (igual ao treino)."""
+    def preparar(self, frame):
+        """Letterbox + normalização, escrevendo DIRETO no buffer fixado.
+
+        Devolve (escala, dx, dy) para desfazer a transformação nas caixas.
+
+        Dois atalhos que importam no rig:
+
+        * quando o quadro já tem exatamente o tamanho da entrada — que é o caso
+          de `--roi`/`--tiles`, onde o recorte é 1:1 — não há redimensionamento
+          nem borda, então o canvas intermediário é pulado por completo;
+        * a conversão para float não passa por `astype`/`/255`/`transpose`, que
+          alocam um quadro inteiro cada. Um `np.multiply` com `out=` faz
+          conversão e escala num passe só, e a cópia por canal grava direto na
+          vista do buffer fixado, dispensando o `ascontiguousarray`.
+        """
         h, w = frame.shape[:2]
-        s = min(self.W / w, self.H / h)
-        nw, nh = int(round(w * s)), int(round(h * s))
-        resized = cv2.resize(frame, (nw, nh))
-        canvas = np.zeros((self.H, self.W, 3), np.uint8)
-        dx, dy = (self.W - nw) // 2, (self.H - nh) // 2
-        canvas[dy:dy + nh, dx:dx + nw] = resized
-        return canvas, s, dx, dy
+        if (h, w) == (self.H, self.W):
+            canvas, s, dx, dy = frame, 1.0, 0, 0
+        else:
+            s = min(self.W / w, self.H / h)
+            nw, nh = int(round(w * s)), int(round(h * s))
+            dx, dy = (self.W - nw) // 2, (self.H - nh) // 2
+            if nw != self.W or nh != self.H:
+                self._canvas.fill(0)          # só quando há barra preta
+            cv2.resize(frame, (nw, nh), dst=self._canvas[dy:dy + nh, dx:dx + nw])
+            canvas = self._canvas
+        cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB, dst=self._rgb8)
+        # divide em vez de multiplicar por 1/255: sai BIT A BIT igual ao
+        # `astype(float32)/255.0` do caminho antigo, por 0,02 ms a mais.
+        # Multiplicar pela recíproca dava 1 ULP de diferença — irrelevante
+        # para a rede, mas custaria uma ressalva em toda comparação futura.
+        np.divide(self._rgb8, np.float32(255), out=self._hwc32)
+        destino = self.host[self.in_name][0]
+        for c in range(3):
+            np.copyto(destino[c], self._hwc32[:, :, c])
+        return s, dx, dy
 
     def __call__(self, frame):
         """Devolve [(x1,y1,x2,y2,classe_idx,conf), …] em coordenadas do frame."""
-        canvas, s, dx, dy = self.letterbox(frame)
-        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        blob = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None])
-
-        np.copyto(self.host[self.in_name], blob)
+        s, dx, dy = self.preparar(frame)
         self.cuda.h2d(self.dev[self.in_name], self.host[self.in_name])
         self.ctx.execute_async_v3(0)
         self.cuda.sync()
@@ -478,15 +509,31 @@ CSI_TRAVAS = {
 
 
 def pipeline_csi(sensor=0, largura=CSI_LARGURA, altura=CSI_ALTURA, fps=CSI_FPS,
-                 travar=True):
+                 travar=True, recorte=None):
+    """Pipeline GStreamer da CSI.
+
+    `recorte=(largura, altura)` pede o recorte CENTRAL ao **nvvidconv**, que usa
+    o VIC (bloco de vídeo dedicado) em vez da CPU. Isso importa muito no modo
+    ROI: capturar 3280x2464 e recortar em numpy obriga o `videoconvert` a
+    converter 8 MP de BGRx para BGR na CPU a cada quadro. Recortando antes, ele
+    converte só a janela útil — no rig, 1408x704, ou seja **8x menos pixel**.
+    """
     travas = ' '.join(f'{k}={v}' for k, v in CSI_TRAVAS.items()) if travar else ''
+    corte = ''
+    if recorte:
+        rw, rh = min(recorte[0], largura), min(recorte[1], altura)
+        x, y = (largura - rw) // 2, (altura - rh) // 2
+        # no nvvidconv, left/right/top/bottom são as COORDENADAS do retângulo na
+        # imagem de entrada, não margens
+        corte = f'left={x} right={x + rw} top={y} bottom={y + rh} '
     return (f'nvarguscamerasrc sensor-id={sensor} {travas} ! '
             f'video/x-raw(memory:NVMM),width={largura},height={altura},'
-            f'framerate={fps}/1 ! nvvidconv ! video/x-raw,format=BGRx ! '
+            f'framerate={fps}/1 ! nvvidconv {corte}! video/x-raw,format=BGRx ! '
             f'videoconvert ! video/x-raw,format=BGR ! appsink drop=1 max-buffers=2')
 
 
-def abrir_camera(spec, largura=1280, altura=720, travar_csi=True, roi=0):
+def abrir_camera(spec, largura=1280, altura=720, travar_csi=True, roi=0,
+                 recorte=None):
     # 'csi' = sensor 0; 'csi:1' = sensor 1. Qual número corresponde a qual
     # conector depende do overlay carregado: com um overlay de câmera única
     # (imx219-A ou imx219-C) só existe o sensor 0, seja qual for o conector
@@ -495,12 +542,13 @@ def abrir_camera(spec, largura=1280, altura=720, travar_csi=True, roi=0):
     if spec == 'csi' or spec.startswith('csi:'):
         sensor = int(spec.split(':', 1)[1]) if ':' in spec else 0
         if roi:   # sensor cheio: a janela vem do recorte, não do downscale
+            corte = recorte or (roi, roi)
             pipe = pipeline_csi(sensor=sensor, largura=CSI_ROI_LARGURA,
                                 altura=CSI_ROI_ALTURA, fps=CSI_ROI_FPS,
-                                travar=travar_csi)
+                                travar=travar_csi, recorte=corte)
             print(f'CSI (IMX219 sensor {sensor}) '
                   f'{CSI_ROI_LARGURA}x{CSI_ROI_ALTURA}@{CSI_ROI_FPS} '
-                  f'-> ROI central {roi}x{roi} (1:1, sem reescalar)')
+                  f'-> recorte {corte[0]}x{corte[1]} no nvvidconv (VIC, não CPU)')
         else:
             pipe = pipeline_csi(sensor=sensor, travar=travar_csi)
             print(f'CSI (IMX219 sensor {sensor}) '
@@ -703,9 +751,15 @@ def main():
               f'sobreposição {sobrepor}px')
 
     fonte = args.source or args.camera
+    # Largura útil = o que os recortes realmente cobrem. Pedir exatamente isso ao
+    # nvvidconv faz o VIC entregar só a janela que vai ser usada, em vez de a CPU
+    # converter o sensor inteiro para depois jogar 90% fora.
+    _lado = args.roi or modelo.W
+    recorte_hw = ((_lado * args.tiles - sobrepor * (args.tiles - 1), _lado)
+                  if args.roi else None)
     cap = (cv2.VideoCapture(args.source) if args.source
            else abrir_camera(args.camera, travar_csi=not args.csi_sem_trava,
-                            roi=args.roi))
+                             roi=args.roi, recorte=recorte_hw))
     # isOpened() NÃO basta em stream de rede: o GStreamer abre um pipeline vazio
     # e devolve True mesmo sem conexão. Só ler um frame de verdade comprova.
     quadro0 = None

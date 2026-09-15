@@ -198,6 +198,37 @@ sudo ./habilitar_camera.sh --desfazer
 sudo systemctl restart nvargus-daemon && sleep 2
 
 --------------------------------------------------------------------------------
+ 7c. COLETAR DATASET  (entra soja, sai dataset pronto pra treinar)
+--------------------------------------------------------------------------------
+
+ Uma bandeja de UMA classe por vez. O rótulo vem da bandeja, não do modelo.
+
+python3 coletar_dataset.py --classe intact       --lote L001 --roi 704
+python3 coletar_dataset.py --classe immature     --lote L002 --roi 704
+python3 coletar_dataset.py --classe spotted      --lote L003 --roi 704
+python3 coletar_dataset.py --classe broken       --lote L004 --roi 704
+python3 coletar_dataset.py --classe skin-damaged --lote L005 --roi 704
+
+# bandeja parada (sem esteira): desliga a compensação de movimento
+python3 coletar_dataset.py --classe intact --lote L001 --roi 704 --parado
+
+# quanto já foi capturado, por classe
+python3 coletar_dataset.py --status
+
+# dividir em train/valid/test (POR GRÃO, sem vazamento entre splits)
+python3 coletar_dataset.py --dividir
+
+ Sai em:  dataset/pronto/{train,valid,test}/<classe>/*.jpg
+          dataset/pronto/RELATORIO.md   <- números e procedência
+          dataset/pronto/dataset.yaml
+
+ O formato é o que o model/treino_base12k_jetson.ipynb já lê.
+
+ CUIDADO: capturar com --sem-trava gera dado de OUTRO domínio e ele fica de
+ fora da divisão por padrão. Para dataset, as travas de exposição têm que
+ estar ligadas.
+
+--------------------------------------------------------------------------------
  8. QUANDO ALGO DÁ ERRADO
 --------------------------------------------------------------------------------
 
