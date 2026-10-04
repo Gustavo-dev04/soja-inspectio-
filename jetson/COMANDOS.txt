@@ -249,7 +249,7 @@ python3 coletar_dataset.py --exportar
    --dataset              grava MESMO fora do rig (celular/vídeo): a sessão
                           fica marcada "_sem-trava" e o --exportar a pula
 
- DISCO: no rig são ~3 GB/h gravando sem parar. Se o Jetson tiver SSD NVMe no
+ DISCO: estimo ~3 GB/h gravando sem parar no rig (a medir). Se o Jetson tiver SSD NVMe no
  slot M.2, aponte o VIGIL_DATASET para ele — cartão SD enche e se desgasta.
 
  O atalho antigo ainda funciona (é o vigil com conf 0.25 e meta de 400):

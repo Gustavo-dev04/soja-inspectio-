@@ -303,7 +303,7 @@ cada grão falso, que **toda caixa exportada tem o rótulo do grão que está ne
 imagem, e a revisão de recortes não enxerga isso. Para auditar, abrir uma
 amostra do COCO exportado no CVAT ou no Label Studio.
 
-**Disco:** gravando sem parar no rig, ~3 GB/h. Com SSD NVMe no slot M.2 do Orin
+**Disco:** gravando sem parar no rig, ~3 GB/h — estimativa pelo tamanho típico de JPEG, a medir no rig. Com SSD NVMe no slot M.2 do Orin
 Nano, apontar `VIGIL_DATASET` para ele — cartão SD enche e se desgasta.
 
 ---
