@@ -169,5 +169,6 @@ echo "  q sai  ·  c zera a contagem  ·  p pausa"
 echo "=============================================="
 echo
 
+# --sem-dataset: apresentação não é coleta — nem se a fonte for a CSI do rig
 exec python3 vigil_jetson.py --engine "$ENGINE" "${FONTE[@]}" \
-     --conf "$CONF" --tela-cheia
+     --conf "$CONF" --tela-cheia --sem-dataset

@@ -236,7 +236,7 @@ echo
 if python3 -c "
 import sys, types
 sys.argv = ['x', '--help']
-exec(open('vigil_jetson.py').read().split('def main()')[0])
+exec(open('vigil_jetson.py').read().split('def main(')[0])
 print('imports do vigil_jetson.py OK')
 " 2>/dev/null; then
     ok "vigil_jetson.py carrega (imports e classes)"

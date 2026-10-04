@@ -198,31 +198,40 @@ sudo ./habilitar_camera.sh --desfazer
 sudo systemctl restart nvargus-daemon && sleep 2
 
 --------------------------------------------------------------------------------
- 7c. COLETAR DATASET DE DETECÇÃO  (para treinar um modelo DO ZERO)
+ 7c. DATASET DE DETECÇÃO  (para treinar um modelo DO ZERO)
 --------------------------------------------------------------------------------
 
- Soja MISTURADA, como cai na esteira. Guarda o QUADRO INTEIRO com as caixas
- (é isso que treina detector; recorte solto só treina classificador) e um
- recorte por grão para você revisar.
+ INSPECIONAR JÁ É COLETAR. No rig (câmera CSI com exposição travada) o
+ vigil_jetson.py cria as pastas sozinho e separa cada grão pela classe que
+ deu a ele. Não existe mais passo de captura separado.
 
-# 1. CAPTURAR
-python3 coletar_dataset.py --engine soja_rfdetr_small_CAMPEAO_fp16.engine \
-  --camera csi --roi 704 --tiles 2 --lote L001
+# 1. INSPECIONAR (grava sozinho). --lote = o lote físico da soja na mesa
+python3 vigil_jetson.py --engine SUA_ENGINE.engine \
+  --camera csi:1 --roi 704 --tiles 2 --esteira --lote L001
 
-# bandeja parada / vídeo gravado
-python3 coletar_dataset.py --engine X.engine --camera csi --roi 704 --parado
-python3 coletar_dataset.py --engine X.engine --source lote.mp4
+ Aparece, sem fazer nada:
+   dataset/quadros/<sessao>/   o que o modelo viu (janelas 704x704) + caixas
+   dataset/revisar/<sessao>/   UM recorte por grão, já na pasta da classe:
+       broken/ immature/ intact/ skin-damaged/ spotted/  descartar/  duvida/
+
+ O HUD mostra "REC 312/2000". Ao bater a meta, a GRAVAÇÃO para e a
+ INSPEÇÃO continua. Também para sozinha com pouco disco livre.
+
+# bandeja parada em vez de esteira
+python3 vigil_jetson.py --engine SUA_ENGINE.engine \
+  --camera csi:1 --roi 704 --parado --lote L002
 
 # 2. CORRIGIR À MÃO  (a única parte manual)
-#    abra dataset/revisar/, ligue miniaturas grandes, arraste o errado.
-#      broken/ immature/ intact/ skin-damaged/ spotted/  descartar/
+#    abra dataset/revisar/<sessao>/, ligue miniaturas grandes, arraste o errado.
+#      descartar/  -> NÃO é grão (sujeira, reflexo, caixa dupla)
+#      duvida/     -> é grão, mas não dá pra saber a classe
 #    Você corrige UM recorte por grão e a correção vale para TODAS as caixas
-#    dele, em todos os quadros — um arquivo movido acerta dezenas de anotações.
+#    dele, em todas as imagens. MOVA, não copie: grão em duas pastas vira dúvida.
 
 # 3. quanto já foi capturado e revisado
 python3 coletar_dataset.py --status
 
-# 4. EXPORTAR em YOLO + COCO, dividido sem vazamento
+# 4. EXPORTAR em YOLO + COCO, dividido sem vazamento (roda até sem GPU)
 python3 coletar_dataset.py --exportar
 
  Sai em:  dataset/pronto/<split>/images/*.jpg + labels/*.txt   (YOLO)
@@ -231,16 +240,20 @@ python3 coletar_dataset.py --exportar
           dataset/pronto/RELATORIO.md  <- inclui a ACURÁCIA DO MODELO ATUAL
                                           no rig, medida pelas suas correções
 
- Os dois formatos saem do mesmo dado: treine com o modelo que quiser.
+ AJUSTES (no vigil_jetson.py):
+   --dataset-graos 2000   meta por sessão (0 = sem limite)
+   --dataset-passo 6      1 varredura a cada 6 (seguidas são quase iguais)
+   --dataset-min-livre 2  GB livres abaixo dos quais a gravação para
+   --dataset-dir DIR      outro disco (ou export VIGIL_DATASET=/mnt/ssd/dataset)
+   --sem-dataset          não grava (apresentação, benchmark)
+   --dataset              grava MESMO fora do rig (celular/vídeo): a sessão
+                          fica marcada "_sem-trava" e o --exportar a pula
 
- AJUSTES úteis:
-   --passo 6     1 quadro a cada 6 varreduras (quadros seguidos são iguais)
-   --bloco 20    tamanho do bloco de tempo usado na divisão (segundos)
-   --guarda 3    banda de guarda entre blocos (segundos)
-   --conf 0.25   confiança baixa de propósito: você filtra na revisão
+ DISCO: no rig são ~3 GB/h gravando sem parar. Se o Jetson tiver SSD NVMe no
+ slot M.2, aponte o VIGIL_DATASET para ele — cartão SD enche e se desgasta.
 
- CUIDADO: capturar com --sem-trava gera dado de OUTRO domínio, e ele fica
- fora da exportação por padrão.
+ O atalho antigo ainda funciona (é o vigil com conf 0.25 e meta de 400):
+python3 coletar_dataset.py --engine SUA_ENGINE.engine --camera csi:1 --roi 704 --tiles 2
 
 --------------------------------------------------------------------------------
  7d. MODO DE ENERGIA E ESCOLHA DE BACKBONE

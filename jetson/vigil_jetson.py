@@ -22,6 +22,17 @@ rastreamento e trava o veredito por contagem de varreduras, não por segundos.
 Dimensione antes com `calcular_vazao.py`, que diz a distância da câmera e a
 velocidade máxima da esteira para a configuração escolhida.
 
+DATASET AUTOMÁTICO — inspecionar no padrão do rig já é coletar:
+
+    dataset/quadros/<sessao>/   o que o modelo viu (janelas 704x704) + caixas
+    dataset/revisar/<sessao>/   um recorte por grão, JÁ na pasta da classe:
+        intact/ immature/ broken/ skin-damaged/ spotted/ descartar/ duvida/
+
+Liga sozinho com a câmera CSI de exposição travada, que é o único domínio que
+entra no dataset (PADRAO_CAPTURA.md). Celular, vídeo e --csi-sem-trava não
+gravam, a menos que se peça com --dataset. --sem-dataset desliga sempre.
+Depois: corrija as pastas à mão e rode `coletar_dataset.py --exportar`.
+
 O padrão é o celular via DroidCam. Quando o IP mudar, NÃO edite o código:
     export VIGIL_CAMERA=http://10.128.188.122:4747/video
 
@@ -691,8 +702,37 @@ def escrever_laudo(caminho, contagem, t0, fps, args, extra=''):
     return laudo
 
 
+def fechar_dataset(gravador, descarregar_vivos):
+    """Fecha a sessão do dataset sem nunca impedir o laudo final, que vem depois."""
+    try:
+        descarregar_vivos()
+        if gravador.pendentes() > 20:
+            print(f'\ndataset: gravando no disco os {gravador.pendentes()} '
+                  'itens que faltam…')
+        r = gravador.fechar()
+    except Exception as e:
+        print(f'\ndataset: erro ao fechar a sessão ({e!r}) — o laudo segue')
+        return
+    if r.get('removida'):
+        print('\ndataset: nenhum grão gravado — sessão vazia removida')
+        return
+    print(f'\ndataset: {r["graos"]} grãos, {r["quadros"]} imagens, '
+          f'{r["caixas"]} caixas, {r["mb"]:.0f} MB')
+    print(f'  revisar : {gravador.dir_r}')
+    print('  corrija as pastas à mão e rode: python3 coletar_dataset.py --exportar')
+    if r['perdidos_fila']:
+        print(f'  {r["perdidos_quadros"]} imagens e {r["perdidos_recortes"]} recortes '
+              'perdidos com a fila cheia (disco lento) — a inspeção não esperou')
+        if r['perdidos_recortes']:
+            print('  as imagens desses grãos saem no --exportar (grão sem rótulo '
+                  'ensinaria "fundo"); disco mais rápido resolve')
+    if r['motivo_parada'] in ('meta', 'disco', 'erro'):
+        print(f'  a gravação parou antes do fim: {r["motivo_parada"]}'
+              + (f' — {r["falha"]}' if r.get('falha') else ''))
+
+
 # ---------------------------------------------------------------- main
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description='Vígil.ia no Jetson (RF-DETR + TensorRT)')
     ap.add_argument('--engine', default='soja_rfdetr_small_CAMPEAO_fp16.engine')
     ap.add_argument('--camera', default=CAMERA_PADRAO,
@@ -735,7 +775,28 @@ def main():
                          '1 = extra na frente). Use --diag pra descobrir o certo.')
     ap.add_argument('--diag', type=int, default=0, metavar='N',
                     help='processa N frames, imprime qual coluna de classe dispara, e sai')
-    args = ap.parse_args()
+    ds = ap.add_argument_group('dataset (grava sozinho no rig — CSI com travas)')
+    ds.add_argument('--sem-dataset', action='store_true',
+                    help='não grava nada, nem no rig (apresentação, benchmark)')
+    ds.add_argument('--dataset', action='store_true',
+                    help='grava MESMO fora do padrão (celular, vídeo, sem travas); '
+                         'a sessão fica marcada e o --exportar a pula por padrão')
+    ds.add_argument('--dataset-dir', default=None, metavar='DIR',
+                    help='onde gravar (padrão: $VIGIL_DATASET ou ./dataset)')
+    ds.add_argument('--lote', default='L001',
+                    help='lote físico da soja — vai no nome de cada grão')
+    ds.add_argument('--dataset-passo', type=int, default=6, metavar='N',
+                    help='grava 1 varredura a cada N (seguidas são quase iguais)')
+    ds.add_argument('--dataset-graos', type=int, default=2000, metavar='N',
+                    help='meta de grãos por sessão; ao bater, para de gravar e a '
+                         'inspeção continua (0 = sem limite)')
+    ds.add_argument('--dataset-min-livre', type=float, default=2.0, metavar='GB',
+                    help='para de gravar com menos que isso de disco livre')
+    ds.add_argument('--dataset-bloco', type=float, default=20.0, metavar='S',
+                    help='bloco de tempo da divisão train/valid/test (segundos)')
+    ds.add_argument('--dataset-guarda', type=float, default=3.0, metavar='S',
+                    help='banda de guarda entre blocos (segundos)')
+    args = ap.parse_args(argv)
 
     if args.esteira:
         args.hold = 0.0
@@ -828,6 +889,64 @@ def main():
         return
     print(f'fonte: {fonte} | q sai · c zera · p pausa')
 
+    # ---- dataset: inspecionar no padrão do rig já é coletar ----
+    # Só a CSI com exposição travada é o domínio do dataset (PADRAO_CAPTURA.md):
+    # celular, vídeo e AE/AWB automático gravariam outro domínio, que depois
+    # teria de ser separado à mão. Por isso o automático vale só no rig.
+    no_padrao = (str(args.camera).startswith('csi') and not args.csi_sem_trava
+                 and not args.source)
+    gravador = None
+    if (no_padrao or args.dataset) and not args.sem_dataset:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import gravador_dataset as gd
+        if gd.CLASSES != NAMES:
+            sys.exit(f'classes divergentes: gravador {gd.CLASSES} x app {NAMES}')
+        gravador = gd.GravadorDataset(
+            raiz=args.dataset_dir or gd.RAIZ_PADRAO, lote=args.lote,
+            passo=args.dataset_passo, max_graos=args.dataset_graos,
+            min_livre_gb=args.dataset_min_livre, travas=no_padrao,
+            bloco_s=args.dataset_bloco, guarda_s=args.dataset_guarda,
+            meta={'engine': os.path.basename(args.engine), 'camera': str(fonte),
+                  'conf': args.conf, 'roi': args.roi, 'tiles': args.tiles,
+                  'sobrepor_px': sobrepor, 'esteira': bool(args.esteira),
+                  'parado': bool(args.parado), 'rotate': args.rotate,
+                  'class_offset': modelo.offset})
+        print(gravador.cabecalho())
+    elif args.sem_dataset:
+        print('dataset : desligado (--sem-dataset)')
+    else:
+        print('dataset : desligado — fonte fora do padrão do rig '
+              '(--dataset grava mesmo assim)')
+
+    # janelas que o modelo come, em coordenadas do quadro: é o que o gravador
+    # salva como imagem, para o dataset ter a MESMA escala da inferência
+    _janelas_cache = {}
+
+    def janelas_de(quadro):
+        h, w = quadro.shape[:2]
+        if (h, w) not in _janelas_cache:
+            if args.tiles <= 1:
+                _janelas_cache[(h, w)] = [(0, 0, w, h)]
+            else:
+                _janelas_cache[(h, w)] = [
+                    (dx, dy, t.shape[1], t.shape[0]) for t, dx, dy in
+                    crop_tiles(quadro, args.roi or modelo.W, args.tiles, sobrepor)]
+        return _janelas_cache[(h, w)]
+
+    def proposta_de(tid):
+        """Classe e confiança atuais de um grão, travado ou não."""
+        cnt = votos.get(tid)
+        if not cnt:
+            return None, None
+        cls = travado.get(tid) or veredito(cnt)
+        return cls, cnt[cls] / max(sum(cnt.values()), 1e-9)
+
+    def descarregar_vivos():
+        """Grava o recorte de todo grão ainda em quadro (fim ou reset)."""
+        for tid in list(visto):
+            cls, cf = proposta_de(tid)
+            gravador.aposentar(tid, cls, cf, visto.get(tid))
+
     votos = defaultdict(Counter)
     visto, primeiro, travado, suave = Counter(), {}, {}, {}
     # Contagem ACUMULADA: numa jornada de 14-16 h passam ~3 milhões de grãos, e
@@ -858,7 +977,12 @@ def main():
                 ms = (time.time() - t0) * 1000
                 agora = time.time()
 
-                for tid, x1, y1, x2, y2, cls_i, cf in tracker.update(dets):
+                rastreados = tracker.update(dets)
+                if gravador:
+                    # ANTES de desenhar: o recorte de um grão não pode levar a
+                    # caixa já pintada no vizinho
+                    gravador.observar(frame, rastreados, janelas_de(frame))
+                for tid, x1, y1, x2, y2, cls_i, cf in rastreados:
                     nome = NAMES[cls_i] if 0 <= cls_i < len(NAMES) else 'intact'
                     votos[tid][nome] += cf
                     visto[tid] += 1
@@ -891,6 +1015,16 @@ def main():
                         cls = veredito(votos[tid])   # saiu antes de travar: usa o voto
                     if cls:
                         contagem[cls] += 1
+                    if gravador:
+                        # grão visto poucas vezes não entra na contagem, mas se
+                        # está numa imagem salva precisa de rótulo: vai para a
+                        # pasta do voto, e a revisão decide (inclusive descartar)
+                        cnt = votos.get(tid)
+                        prop = cls or (veredito(cnt) if cnt else None)
+                        gravador.aposentar(
+                            tid, prop,
+                            cnt[prop] / max(sum(cnt.values()), 1e-9) if prop and cnt else None,
+                            visto.get(tid))
                     votos.pop(tid, None); visto.pop(tid, None)
                     primeiro.pop(tid, None); suave.pop(tid, None)
 
@@ -907,7 +1041,8 @@ def main():
                 bons = dist.get('intact', 0)
                 ruins = sum(v for k, v in dist.items() if k != 'intact')
                 hud = (f'{len(dets)} graos  |  Premium {bons}  Expulso {ruins}  |  '
-                       f'{fps:.0f} fps  {ms:.0f} ms')
+                       f'{fps:.0f} fps  {ms:.0f} ms'
+                       + (f'  |  {gravador.hud()}' if gravador else ''))
                 cv2.putText(frame, hud, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
                 cv2.putText(frame, hud, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
@@ -926,6 +1061,9 @@ def main():
                 if k == ord('p'):
                     pausado = not pausado
                 if k == ord('c'):
+                    if gravador:
+                        descarregar_vivos()
+                        gravador.nova_epoca()
                     votos.clear(); visto.clear(); primeiro.clear()
                     travado.clear(); suave.clear(); contagem.clear()
                     tracker = IoUTracker(compensar=not args.parado)
@@ -936,6 +1074,8 @@ def main():
         if writer:
             writer.release()
             print('salvo:', args.out)
+        if gravador:
+            fechar_dataset(gravador, descarregar_vivos)
         if not args.no_window:
             cv2.destroyAllWindows()
 

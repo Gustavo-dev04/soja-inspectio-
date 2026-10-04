@@ -232,6 +232,24 @@ equivalente do `deck/vigil_deck.py`, mas consumindo a `.engine` via TensorRT em
 vez do `.pt` via ultralytics, mantendo a mesma regra de **voto exigente por
 classe** e **veredito travado por grão**. Para o rig com esteira, ver §4a.
 
+### Dataset automático
+
+No padrão do rig (CSI com exposição travada), **inspecionar já é coletar**: o
+app cria as pastas sozinho e separa cada grão pela classe que deu a ele.
+
+```
+dataset/quadros/<sessao>/   o que o modelo viu (janelas 704x704) + caixas
+dataset/revisar/<sessao>/   um recorte por grão, já na pasta da classe:
+    broken/ immature/ intact/ skin-damaged/ spotted/  descartar/  duvida/
+```
+
+Corrija arrastando entre pastas e exporte com
+`python3 coletar_dataset.py --exportar` (YOLO + COCO, sem vazamento entre
+splits; roda sem GPU). O HUD mostra `REC n/2000`; ao bater a meta a gravação
+para e a inspeção continua. `--sem-dataset` desliga; `--dataset` força a
+gravação fora do rig (marcada, e pulada na exportação). Detalhes em
+`../DOCUMENTACAO.md` §4.5 e `COMANDOS.txt` §7c.
+
 ---
 
 ## Comportamento esperado: multi-grão bom, grão solto ruim

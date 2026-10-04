@@ -228,32 +228,44 @@ Scripts que substituem chute por conta, todos em `jetson/`:
 | `calcular_vazao.py` | essa configuração de câmara entrega a vazão alvo? qual a velocidade máxima da esteira? |
 | `calibrar_rig.py` | quantos px/mm o rig entrega *de verdade* (com régua) e a exposição está boa? |
 | `testar_esteira.py` | roda no PC, sem Jetson nem câmera: valida rastreamento, recortes e contabilidade |
-| `coletar_dataset.py` | entra soja, sai dataset dividido em train/valid/test — ver §4.5 |
+| `gravador_dataset.py` | usado pelo app: grava o dataset sozinho enquanto inspeciona — ver §4.5 |
+| `coletar_dataset.py` | status, e exportação em YOLO + COCO dividida em train/valid/test — ver §4.5 |
 | `bench_energia.py` | quantos watts e quantos graus, ocioso e sob carga |
 | `projetar_qps.py` | qual backbone dá quantos qps neste aparelho, e quanto isso vira de kg/h |
 
 ### 4.5 Coleta de dataset — o laço de MLOps
 
-`jetson/coletar_dataset.py` produz o dataset de **detecção** com que um modelo
-novo será treinado **do zero**, no domínio do rig.
+**Inspecionar já é coletar.** No padrão do rig (câmera CSI com exposição
+travada), o `vigil_jetson.py` grava o dataset de **detecção** sozinho, enquanto
+inspeciona — é com ele que o modelo novo será treinado **do zero**, no domínio
+do rig. Não há mais passo de captura separado. A gravação fica em
+`jetson/gravador_dataset.py`:
 
-Entra soja **misturada**, como cai na esteira. O detector atual acha os grãos,
-rastreia e fecha a classe por voto — as mesmas regras do app ao vivo. O script
-guarda **duas coisas**:
+```
+dataset/quadros/<sessao>/   o que o modelo viu (janelas 704x704) + caixas
+dataset/revisar/<sessao>/   UM recorte por grão, já na pasta da classe:
+    intact/ immature/ broken/ skin-damaged/ spotted/  descartar/  duvida/
+```
 
-- **o quadro inteiro com todas as caixas**, que é o que treina detector. Recorte
-  solto só treina classificador: o detector precisa aprender *onde* o grão está,
-  quantos existem no quadro e como se encostam, e isso só está na cena. O
-  pipeline antigo montava cenas sintéticas justamente porque só tinha foto de um
-  grão por imagem; o rig entrega cena densa **real**, com fundo e oclusão reais.
-- **um recorte por grão**, na pasta da classe proposta, para a revisão humana.
+Duas coisas são guardadas:
 
-Corrigir é **arrastar arquivo entre pastas**. E como o rastreamento liga o
-recorte a todas as caixas daquele grão, **uma correção acerta dezenas de
-anotações** — nos testes, até 10 caixas por arquivo movido.
+- **a cena com todas as caixas**, que é o que treina detector — recorte solto
+  só treina classificador. Cada imagem é **exatamente uma janela de entrada do
+  modelo**: no rig com 2 recortes, a faixa tem ~1267×704 e o modelo vê duas
+  janelas 704×704. Treinar com a faixa inteira reduzida a 704 mostraria o grão
+  com ~50 px em vez dos ~89 px da inferência — escala errada, em silêncio.
+- **um recorte por grão**, na pasta da classe que o app deu, para a revisão
+  humana. Escolhido pela vista **mais centrada** numa janela (menos distorção da
+  120°, luz mais uniforme do ring light), um critério geométrico que não custa
+  processamento.
 
-`--exportar` gera YOLO e COCO do mesmo dado, então a escolha do modelo fica em
-aberto:
+Corrigir é **arrastar arquivo entre pastas**. Como o rastreamento liga o recorte
+a todas as caixas daquele grão, **uma correção acerta várias anotações** — nos
+testes, até 20 caixas por arquivo. Duas pastas além das classes:
+`descartar/` (não é grão: a caixa some) e `duvida/` (é grão sem classe: a imagem
+inteira sai).
+
+`coletar_dataset.py --exportar` gera YOLO e COCO do mesmo dado, e roda sem GPU:
 
 ```
 dataset/pronto/<split>/images/*.jpg + labels/*.txt   (YOLO)
@@ -265,18 +277,34 @@ proposta e a pasta guarda a corrigida, então a diferença é a **acurácia do
 modelo atual no rig, contra rótulo humano** — a medição que §2.3 lista como
 inexistente, e a linha de base que o modelo novo precisa bater.
 
-Duas proteções contra erro silencioso:
+Proteções contra erro silencioso, todas cobertas por `jetson/testar_coleta.py`,
+que roda o laço real do app com câmera e modelo falsos e confere, pela cor de
+cada grão falso, que **toda caixa exportada tem o rótulo do grão que está nela**:
 
-- **Divisão por bloco de tempo, com banda de guarda.** Quadros consecutivos da
-  esteira são quase idênticos (o grão anda ~4 mm entre varreduras); dividir por
-  quadro poria praticamente a mesma imagem no treino e na validação. Blocos
-  inteiros vão juntos, a banda de guarda é maior que a travessia de um grão, e a
-  exportação verifica a ausência de vazamento antes de terminar.
-- **Grão cortado na borda não vira anotação**, e recorte borrado não chega à
-  revisão — ensinariam o detector a chamar meio grão de grão inteiro.
+- **Grão sem rótulo derruba a imagem.** Grão dentro da imagem sem caixa ensina
+  o detector que aquilo é *fundo*. Por isso todo grão de imagem salva ganha
+  recorte, e a exportação descarta a imagem inteira se algum ficar sem rótulo.
+- **Divisão sem vazamento.** Quadros consecutivos da esteira são quase
+  idênticos. A captura é cortada em blocos de tempo, e blocos que compartilham
+  um grão vão para o **mesmo** split. Na esteira cada bloco fica sozinho; na
+  bandeja parada a sessão inteira vira um bloco só — antes, isso quebrava a
+  exportação. Banda de guarda nas fronteiras entre splits cobre a troca de ID.
+- **Nunca segura a inspeção.** JPEG e disco ficam numa thread, com fila de
+  prioridade para recortes (grãos da mesma fileira saem juntos, em rajada). Fila
+  cheia perde o item e conta; o laço não espera. Medido com disco simulado de
+  50 ms por arquivo: pior varredura em 1,9 ms.
+- **Memória limitada aos grãos vivos**, para jornadas de 14–16 h.
+- **Para sozinha** ao bater a meta de grãos da sessão (2000 por padrão) ou com
+  pouco disco livre — a inspeção continua.
+- **Só grava no domínio certo.** Celular, vídeo e `--csi-sem-trava` não gravam
+  por padrão; com `--dataset` gravam marcados, e a exportação os pula.
 
-Captura feita **sem** as travas de exposição fica fora da exportação por padrão:
-é outro domínio.
+**Limite conhecido:** grão que o detector atual **não achou** fica sem caixa na
+imagem, e a revisão de recortes não enxerga isso. Para auditar, abrir uma
+amostra do COCO exportado no CVAT ou no Label Studio.
+
+**Disco:** gravando sem parar no rig, ~3 GB/h. Com SSD NVMe no slot M.2 do Orin
+Nano, apontar `VIGIL_DATASET` para ele — cartão SD enche e se desgasta.
 
 ---
 
@@ -384,14 +412,18 @@ O `immature` do dataset atual está sistematicamente errado (as fotos não são 
 grãos imaturos) e `spotted` tem poucos exemplos. Com o rig padronizado e
 10 mil+ grãos físicos disponíveis, isso deixa de ser limitação.
 
-- [ ] **Bandeja de classe única → rótulo de graça.** Passar um lote de UMA
-      classe por vez: a caixa sai do Otsu (fundo controlado, >98% de acerto
-      histórico) e a classe vem da pasta. Dezenas de milhares de caixas
-      corretas, **zero anotação manual**.
-- [ ] **Bandeja mista → validação anotada à mão.** Algumas centenas de grãos,
-      5 classes balanceadas. É o **único** conjunto que mede recall de verdade.
+- [x] **Gravação automática no app** — inspecionar no rig já grava cena +
+      caixas e separa um recorte por grão na pasta da classe (§4.5).
+- [ ] **Sessões de soja misturada**, como cai na esteira, com `--lote` marcando
+      cada lote físico. Várias sessões curtas valem mais que uma longa: o split
+      é por grupo independente de blocos, e bandeja parada vira um grupo só.
+- [ ] **Revisar TODOS os recortes de cada sessão**, inclusive os que já estão
+      certos — só assim a pasta é rótulo e o `--exportar` mede a acurácia do
+      modelo atual no rig.
 - [ ] Gravar um **lote propositalmente ruim**, com defeito conhecido — sem ele
       não dá para distinguir modelo bom de modelo viciado em dizer "intacto".
+- [ ] Auditar uma amostra de imagens inteiras no CVAT/Label Studio: grão que o
+      detector atual não achou fica sem caixa, e a revisão de recortes não vê.
 
 ### Fase 3 — Treino no novo domínio
 
@@ -592,12 +624,15 @@ CLAUDE.md                      instruções de projeto para assistente de códig
 
 jetson/                        ── a frente do MVP ──
   PADRAO_CAPTURA.md            NORMATIVO: define o rig; dado fora dele não entra no dataset
-  vigil_jetson.py              app de inferência ao vivo (TensorRT, modo esteira, laudo)
+  vigil_jetson.py              app de inferência ao vivo (TensorRT, esteira, laudo, dataset)
+  gravador_dataset.py          grava o dataset enquanto inspeciona (thread, sem TensorRT)
+  coletar_dataset.py           status + exportação YOLO/COCO do dataset do rig
   calcular_optica.py           lente + distância → pixels por grão
   calcular_vazao.py            câmara + recortes + fps → velocidade máx e kg/h
   calibrar_rig.py              medição com régua: px/mm e exposição
   projetar_qps.py              backbone → qps no aparelho → kg/h no rig
   testar_esteira.py            testes que rodam no PC, sem Jetson nem câmera
+  testar_coleta.py             o laço real do app gravando dataset, com câmera falsa
   bench_trt.sh                 benchmark da engine no aparelho
   README.md                    guia de ONNX → engine → app
 
