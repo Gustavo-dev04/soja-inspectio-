@@ -232,6 +232,7 @@ Scripts que substituem chute por conta, todos em `jetson/`:
 | `coletar_dataset.py` | status, e exportação em YOLO + COCO dividida em train/valid/test — ver §4.5 |
 | `bench_energia.py` | quantos watts e quantos graus, ocioso e sob carga |
 | `projetar_qps.py` | qual backbone dá quantos qps neste aparelho, e quanto isso vira de kg/h |
+| `produto/vigild.py` | o aparelho: serviço com página do operador, lotes e laudos — ver §4.6 |
 
 ### 4.5 Coleta de dataset — o laço de MLOps
 
@@ -305,6 +306,49 @@ amostra do COCO exportado no CVAT ou no Label Studio.
 
 **Disco:** gravando sem parar no rig, ~3 GB/h — estimativa pelo tamanho típico de JPEG, a medir no rig. Com SSD NVMe no slot M.2 do Orin
 Nano, apontar `VIGIL_DATASET` para ele — cartão SD enche e se desgasta.
+
+### 4.6 Software do aparelho — o operador sem terminal
+
+`jetson/produto/` transforma o script num **aparelho**: um serviço do sistema
+que sobe no boot, inspeciona sem parar e serve uma página que o operador abre
+no **celular ou tablet**, pelo Wi-Fi. Sem tela extra no rig, sem flags, sem
+internet obrigatória.
+
+```
+vigild (serviço systemd, um processo)
+ ├─ Inspecao (thread)   câmera → TensorRT → rastreamento → contagem → dataset
+ ├─ página + API local  http://<ip-do-jetson>:8080 — vídeo ao vivo, estado, lotes
+ └─ SQLite vigil.db     lotes, laudos (com fila de sincronização), registro
+```
+
+O fluxo do operador: **novo lote** (código, produtor, variedade, amostra) →
+**iniciar** → acompanha premium × não-premium ao vivo → **encerrar** → laudo
+imprimível, que vira PDF pelo próprio navegador. Cada lote abre a sua própria
+sessão de dataset (§4.5), com o código do lote no nome de cada grão.
+
+Decisões e o porquê:
+
+- **Só biblioteca padrão.** `http.server`, `sqlite3`, HTML/JS puro — nada para
+  instalar no Jetson, onde o `pip` já brigou com o
+  "externally-managed-environment". Independência de biblioteca foi requisito.
+- **Uma configuração, dois caminhos.** `produto/aparelho.json` é traduzido para
+  os mesmos argumentos do `vigil_jetson.py`; a classe `Inspecao` é a mesma na
+  linha de comando e no serviço.
+- **Laudo auditável.** Cada laudo leva o SHA-256 do próprio conteúdo, impresso
+  no rodapé. Alterar o laudo no banco depois faz a página acusar a divergência.
+  Leva também o número de série do Jetson e a impressão digital do modelo.
+- **Nada derruba a inspeção.** Câmera que cai é reaberta sozinha; varredura com
+  erro é registrada e o laço segue; erro de requisição morre na requisição.
+- **Desligar não perde lote.** SIGTERM encerra o lote aberto com laudo. Queda de
+  energia: o lote é fotografado a cada 30 s, e ao voltar ele aparece como
+  **interrompido**, com o laudo da última fotografia.
+- **Tempo por etapa** (captura, pré, GPU, pós, rastreamento, dataset, votos) no
+  estado, no laudo e no fim da linha de comando (`--tempos` também no vídeo). É
+  a medição que decide onde vale otimizar — e se vale C++.
+
+Testado por `jetson/testar_produto.py`: HTTP de verdade, câmera e modelo falsos,
+46 verificações — fluxo do lote, laudo adulterado sendo denunciado, câmera
+caindo e voltando, SIGTERM e queda de energia no meio do lote.
 
 ---
 
@@ -475,6 +519,26 @@ qualquer captura própria.
       também acurácia no conjunto anotado. FP16 já entrega a meta com folga:
       **INT8 é margem, não requisito.**
 
+### Software do aparelho — próximas fases
+
+A fase 1 (§4.6) está feita. As seguintes, em ordem:
+
+- [ ] **Sincronização + painel na nuvem.** Migração `supabase/migrations/0002_*`
+      (`aparelhos`, `laudos`, RLS por aparelho — fecha também o item de RLS
+      abaixo); `produto/sincronizar.py` enviando os laudos pendentes com upsert
+      por UUID e nova tentativa; páginas `/painel` no `frontend/` (lotes, laudos,
+      aparelhos). O modo foto com YOLO (AGPL, §2.4) sai do produto vendido.
+- [ ] **Proteção do modelo.** Engine cifrada (AES-GCM) com chave derivada do
+      número de série do Jetson + segredo do fornecedor; `licenca.json` assinada
+      (Ed25519) com aparelho, validade e recursos. Decifra só em memória — o
+      `RFDetrTRT` já desserializa de bytes. Limite honesto: root com acesso
+      físico ainda extrai; é barreira, não cofre.
+- [ ] **Vazão.** Guiada pela medição de tempo por etapa: engine com batch 2 (os
+      dois recortes numa chamada), `/255` e HWC→CHW dentro do ONNX, pipeline em
+      threads; C++/CUDA só na etapa que a medição apontar.
+- [ ] **Atualização de modelo assinada** pela rede, e envio do dataset revisado
+      — fecha o laço de MLOps.
+
 ### Fora do MVP (registrado, não priorizado)
 
 - Resolver a exposição AGPL do site antes de qualquer venda que o inclua —
@@ -631,6 +695,13 @@ jetson/                        ── a frente do MVP ──
   calcular_vazao.py            câmara + recortes + fps → velocidade máx e kg/h
   calibrar_rig.py              medição com régua: px/mm e exposição
   projetar_qps.py              backbone → qps no aparelho → kg/h no rig
+  produto/                     o software do aparelho (§4.6)
+    vigild.py                  serviço: inspeção + página do operador
+    servico.py web.py banco.py lotes, API local e SQLite — só biblioteca padrão
+    aparelho.json              configuração do rig (o operador não vê flags)
+    ui/                        página ao vivo e laudo imprimível
+    instalar_servico.sh        systemd: sobe no boot, reinicia se cair
+  testar_produto.py            o aparelho inteiro por HTTP, com câmera falsa
   testar_esteira.py            testes que rodam no PC, sem Jetson nem câmera
   testar_coleta.py             o laço real do app gravando dataset, com câmera falsa
   bench_trt.sh                 benchmark da engine no aparelho

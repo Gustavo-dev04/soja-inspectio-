@@ -52,6 +52,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
 
@@ -240,6 +241,9 @@ class RFDetrTRT:
         self._canvas = np.zeros((self.H, self.W, 3), np.uint8)
         self._rgb8 = np.empty((self.H, self.W, 3), np.uint8)
         self._hwc32 = np.empty((self.H, self.W, 3), np.float32)
+        # ms acumulados desde o último zerar — a Inspecao lê e zera por varredura
+        # (no modo --tiles somam os recortes)
+        self.tempos = {'pre': 0.0, 'gpu': 0.0}
         print(f'engine: entrada {self.W}x{self.H} | {self.shapes[self.box_name][1]} queries '
               f'| {self.n_cls} colunas de classe | offset={self.offset}'
               f'{" (forçado)" if self.offset_forcado is not None else ""}')
@@ -299,12 +303,17 @@ class RFDetrTRT:
 
     def __call__(self, frame):
         """Devolve [(x1,y1,x2,y2,classe_idx,conf), …] em coordenadas do frame."""
+        t0 = time.perf_counter()
         s, dx, dy = self.preparar(frame)
+        t1 = time.perf_counter()
         self.cuda.h2d(self.dev[self.in_name], self.host[self.in_name])
         self.ctx.execute_async_v3(0)
         self.cuda.sync()
         for nome in self.saidas:
             self.cuda.d2h(self.host[nome], self.dev[nome])
+        t2 = time.perf_counter()
+        self.tempos['pre'] += (t1 - t0) * 1000
+        self.tempos['gpu'] += (t2 - t1) * 1000
 
         boxes = self.host[self.box_name][0].astype(np.float32)     # (N,4)
         logits = self.host[self.cls_name][0].astype(np.float32)    # (N,C)
@@ -677,6 +686,20 @@ def escrever_laudo(caminho, contagem, t0, fps, args, extra=''):
     Gravado periodicamente para que uma jornada de 14-16 h não perca tudo se o
     app cair no fim.
     """
+    laudo = montar_laudo(contagem, t0, fps, args, extra)
+    gravar_json(caminho, laudo)
+    return laudo
+
+
+def gravar_json(caminho, dados):
+    """Grava por arquivo temporário + rename: laudo pela metade não existe."""
+    tmp = f'{caminho}.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, caminho)
+
+
+def montar_laudo(contagem, t0, fps, args, extra=''):
     total = sum(contagem.values())
     premium = contagem.get('intact', 0)
     dur = time.time() - t0
@@ -697,8 +720,6 @@ def escrever_laudo(caminho, contagem, t0, fps, args, extra=''):
                    'massa_grao_g': MASSA_GRAO_G},
         'obs': extra,
     }
-    with open(caminho, 'w') as f:
-        json.dump(laudo, f, ensure_ascii=False, indent=2)
     return laudo
 
 
@@ -712,10 +733,10 @@ def fechar_dataset(gravador, descarregar_vivos):
         r = gravador.fechar()
     except Exception as e:
         print(f'\ndataset: erro ao fechar a sessão ({e!r}) — o laudo segue')
-        return
+        return None
     if r.get('removida'):
         print('\ndataset: nenhum grão gravado — sessão vazia removida')
-        return
+        return r
     print(f'\ndataset: {r["graos"]} grãos, {r["quadros"]} imagens, '
           f'{r["caixas"]} caixas, {r["mb"]:.0f} MB')
     print(f'  revisar : {gravador.dir_r}')
@@ -729,10 +750,11 @@ def fechar_dataset(gravador, descarregar_vivos):
     if r['motivo_parada'] in ('meta', 'disco', 'erro'):
         print(f'  a gravação parou antes do fim: {r["motivo_parada"]}'
               + (f' — {r["falha"]}' if r.get('falha') else ''))
+    return r
 
 
 # ---------------------------------------------------------------- main
-def main(argv=None):
+def criar_parser():
     ap = argparse.ArgumentParser(description='Vígil.ia no Jetson (RF-DETR + TensorRT)')
     ap.add_argument('--engine', default='soja_rfdetr_small_CAMPEAO_fp16.engine')
     ap.add_argument('--camera', default=CAMERA_PADRAO,
@@ -773,6 +795,8 @@ def main(argv=None):
     ap.add_argument('--class-offset', type=int, default=None,
                     help='desloca a leitura das colunas de classe (0 = extra no fim, '
                          '1 = extra na frente). Use --diag pra descobrir o certo.')
+    ap.add_argument('--tempos', action='store_true',
+                    help='mostra no vídeo o tempo de cada etapa da varredura')
     ap.add_argument('--diag', type=int, default=0, metavar='N',
                     help='processa N frames, imprime qual coluna de classe dispara, e sai')
     ds = ap.add_argument_group('dataset (grava sozinho no rig — CSI com travas)')
@@ -796,299 +820,521 @@ def main(argv=None):
                     help='bloco de tempo da divisão train/valid/test (segundos)')
     ds.add_argument('--dataset-guarda', type=float, default=3.0, metavar='S',
                     help='banda de guarda entre blocos (segundos)')
-    args = ap.parse_args(argv)
+    return ap
 
-    if args.esteira:
-        args.hold = 0.0
-    print(f'carregando {args.engine} …')
-    modelo = RFDetrTRT(args.engine, conf=args.conf, offset=args.class_offset)
-    tracker = IoUTracker(compensar=not args.parado)
-    # sobreposição entre recortes: precisa ser MAIOR que um grão, senão o grão da
-    # costura sai cortado nos dois lados. 20% de 704 px = 141 px; a ~12,7 px/mm
-    # do rig isso são 11 mm, ~1,6 grãos. Ver calcular_vazao.py --sobrepor.
-    sobrepor = int((args.roi or modelo.W) * 0.2) if args.tiles > 1 else 0
-    if args.tiles > 1:
-        print(f'recortes: {args.tiles} x {args.roi or modelo.W}px, '
-              f'sobreposição {sobrepor}px')
 
-    fonte = args.source or args.camera
-    # Largura útil = o que os recortes realmente cobrem. Pedir exatamente isso ao
-    # nvvidconv faz o VIC entregar só a janela que vai ser usada, em vez de a CPU
-    # converter o sensor inteiro para depois jogar 90% fora.
-    _lado = args.roi or modelo.W
-    recorte_hw = ((_lado * args.tiles - sobrepor * (args.tiles - 1), _lado)
-                  if args.roi else None)
-    cap = (cv2.VideoCapture(args.source) if args.source
-           else abrir_camera(args.camera, travar_csi=not args.csi_sem_trava,
-                             roi=args.roi, recorte=recorte_hw))
-    # isOpened() NÃO basta em stream de rede: o GStreamer abre um pipeline vazio
-    # e devolve True mesmo sem conexão. Só ler um frame de verdade comprova.
-    quadro0 = None
-    if cap.isOpened():
-        for _ in range(15):
-            ok, quadro0 = cap.read()
-            if ok and quadro0 is not None:
-                quadro0 = enquadrar(quadro0, args)
-                break
-            time.sleep(0.2)
-        else:
-            quadro0 = None
-    if quadro0 is None:
-        msg = [f'a fonte abriu mas não veio nenhum frame: {fonte}', '']
-        if str(fonte).startswith('http'):
-            ip = str(fonte).split('//')[-1].split(':')[0]
-            msg += ['  Parece rede. Confira, nesta ordem:',
-                    f'    1. o Jetson enxerga o celular?   ping -c2 {ip}',
-                    '    2. qual o IP do Jetson?           ip -4 addr | grep inet',
-                    '       (Jetson e celular precisam estar na MESMA faixa,',
-                    '        ex. ambos 192.168.15.x — Wi-Fi vs cabo costuma separar)',
-                    '    3. o DroidCam está aberto e mostrando esse IP na tela?',
-                    f'    4. o stream responde?             curl -sI {fonte} | head -1',
-                    '',
-                    '  Pra testar o resto do app sem depender da rede:',
-                    '    python3 vigil_jetson.py --source teste_soja.mp4 --out saida.mp4']
-        else:
-            msg += ['  Câmera local: veja os índices disponíveis com',
-                    '    ls /dev/video*']
-        sys.exit('\n'.join(msg))
-    print(f'fonte OK: {quadro0.shape[1]}x{quadro0.shape[0]}')
+class FonteSemQuadro(RuntimeError):
+    """A fonte abriu mas não entregou quadro — a mensagem diz o que conferir."""
 
-    # As travas de exposição (CSI_TRAVAS) foram escolhidas para a câmara fechada
-    # COM ring light. Fora dela — bancada, luz ambiente — 13 ms com ganho 1 dá
-    # uma imagem quase preta, e o wbmode=0 (sem balanço de branco) puxa para o
-    # magenta. Nada falha, e é fácil confundir com defeito da câmera: por isso o
-    # aviso, medindo o primeiro quadro em vez de deixar a pessoa descobrir na tela.
-    if str(args.camera).startswith('csi') and not args.csi_sem_trava \
-            and not args.source:
-        _brilho = cv2.cvtColor(quadro0, cv2.COLOR_BGR2GRAY).mean()
-        if _brilho < 25:
-            print(f'\nAVISO: quadro muito escuro (brilho médio {_brilho:.0f}/255).')
-            print('  As travas de exposição estão LIGADAS e foram calibradas para a')
-            print('  câmara fechada com ring light. Sem ele, use o automático:')
-            print('      --csi-sem-trava')
-            print('  (só para montar e focar — dado de dataset exige as travas)\n')
+
+def _msg_fonte(fonte):
+    msg = [f'a fonte abriu mas não veio nenhum frame: {fonte}', '']
+    if str(fonte).startswith('http'):
+        ip = str(fonte).split('//')[-1].split(':')[0]
+        msg += ['  Parece rede. Confira, nesta ordem:',
+                f'    1. o Jetson enxerga o celular?   ping -c2 {ip}',
+                '    2. qual o IP do Jetson?           ip -4 addr | grep inet',
+                '       (Jetson e celular precisam estar na MESMA faixa,',
+                '        ex. ambos 192.168.15.x — Wi-Fi vs cabo costuma separar)',
+                '    3. o DroidCam está aberto e mostrando esse IP na tela?',
+                f'    4. o stream responde?             curl -sI {fonte} | head -1',
+                '',
+                '  Pra testar o resto do app sem depender da rede:',
+                '    python3 vigil_jetson.py --source teste_soja.mp4 --out saida.mp4']
+    else:
+        msg += ['  Câmera local: veja os índices disponíveis com',
+                '    ls /dev/video*']
+    return '\n'.join(msg)
+
+
+# Etapas de uma varredura, na ordem. 'votos' inclui o voto por grão, o desenho,
+# o HUD e a gravação do vídeo anotado. É a medição que decide onde vale otimizar
+# (e se vale C++): cada ms tirado da varredura vira mm/s de esteira.
+ETAPAS = ('captura', 'pre', 'gpu', 'pos', 'tracker', 'gravador', 'votos')
+
+
+class Inspecao:
+    """O laço de inspeção, controlável de fora — CLI, serviço ou teste.
+
+    Abre modelo e câmera UMA vez e fica rodando; os lotes começam e terminam
+    sem reabrir nada (abrir a engine e a CSI leva segundos). Cada lote zera a
+    contagem e abre a sua própria sessão de dataset.
+
+        insp = Inspecao(args)
+        insp.iniciar_lote('L001')
+        while insp.passo():          # uma varredura
+            ...
+        laudo = insp.encerrar_lote()
+        insp.fechar()
+
+    Thread-safe para o serviço: `passo()` roda numa thread e `estado()`,
+    `iniciar_lote()`, `encerrar_lote()` e `zerar()` podem vir de outra.
+    """
+
+    def __init__(self, args, log=print):
+        self.args, self.log = args, log
+        if args.esteira:
+            args.hold = 0.0
+        log(f'carregando {args.engine} …')
+        self.modelo = RFDetrTRT(args.engine, conf=args.conf, offset=args.class_offset)
+        # sobreposição entre recortes: precisa ser MAIOR que um grão, senão o
+        # grão da costura sai cortado nos dois lados. 20% de 704 px = 141 px; a
+        # ~12,7 px/mm do rig isso são 11 mm, ~1,6 grãos. Ver calcular_vazao.py.
+        self.sobrepor = int((args.roi or self.modelo.W) * 0.2) if args.tiles > 1 else 0
+        if args.tiles > 1:
+            log(f'recortes: {args.tiles} x {args.roi or self.modelo.W}px, '
+                f'sobreposição {self.sobrepor}px')
+        self.fonte = args.source or args.camera
+        # Largura útil = o que os recortes realmente cobrem. Pedir exatamente
+        # isso ao nvvidconv faz o VIC entregar só a janela que vai ser usada.
+        lado = args.roi or self.modelo.W
+        self.recorte_hw = ((lado * args.tiles - self.sobrepor * (args.tiles - 1), lado)
+                           if args.roi else None)
+        self.cap = self._abrir()
+        self.quadro0 = self._primeiro_quadro()
+        log(f'fonte OK: {self.quadro0.shape[1]}x{self.quadro0.shape[0]}')
+        self._avisar_escuro()
+        # Só a CSI com exposição travada é o domínio do dataset
+        # (PADRAO_CAPTURA.md): celular, vídeo e AE/AWB automático gravariam
+        # outro domínio. Por isso o automático vale só no rig.
+        self.no_padrao = (str(args.camera).startswith('csi')
+                          and not args.csi_sem_trava and not args.source)
+
+        self.trava = threading.RLock()
+        self.gravador, self.lote, self.writer = None, None, None
+        self.ultimo_dataset = None
+        self._janelas_cache = {}
+        self.tempos = {e: 0.0 for e in ETAPAS}      # EMA, ms
+        self._soma = {e: 0.0 for e in ETAPAS}       # média da sessão
+        self._n = 0
+        self.fps, self.ms, self.n_dets = 0.0, 0.0, 0
+        self._t_prev = time.time()
+        self._ultimo = self.quadro0
+        self._zerar_estado()
+
+    # ------------------------------------------------------------ câmera
+    def _abrir(self):
+        a = self.args
+        return (cv2.VideoCapture(a.source) if a.source
+                else abrir_camera(a.camera, travar_csi=not a.csi_sem_trava,
+                                  roi=a.roi, recorte=self.recorte_hw))
+
+    def _primeiro_quadro(self):
+        # isOpened() NÃO basta em stream de rede: o GStreamer abre um pipeline
+        # vazio e devolve True mesmo sem conexão. Só ler um frame comprova.
+        if self.cap.isOpened():
+            for _ in range(15):
+                ok, q = self.cap.read()
+                if ok and q is not None:
+                    return enquadrar(q, self.args)
+                time.sleep(0.2)
+        raise FonteSemQuadro(_msg_fonte(self.fonte))
+
+    def reabrir(self):
+        """Para o serviço: a câmera caiu (cabo, driver) — tenta de novo."""
+        try:
+            self.cap.release()
+        except Exception:
+            pass
+        try:
+            self.cap = self._abrir()
+            self._primeiro_quadro()
+            return True
+        except Exception:
+            return False
+
+    def _avisar_escuro(self):
+        # As travas de exposição foram escolhidas para a câmara fechada COM ring
+        # light. Fora dela 13 ms com ganho 1 dá uma imagem quase preta, e o
+        # wbmode=0 puxa para o magenta. Nada falha, e é fácil confundir com
+        # defeito da câmera — por isso o aviso, medindo o primeiro quadro.
+        a = self.args
+        if str(a.camera).startswith('csi') and not a.csi_sem_trava and not a.source:
+            brilho = cv2.cvtColor(self.quadro0, cv2.COLOR_BGR2GRAY).mean()
+            if brilho < 25:
+                self.log(f'\nAVISO: quadro muito escuro (brilho médio {brilho:.0f}/255).\n'
+                         '  As travas de exposição estão LIGADAS e foram calibradas para a\n'
+                         '  câmara fechada com ring light. Sem ele, use o automático:\n'
+                         '      --csi-sem-trava\n'
+                         '  (só para montar e focar — dado de dataset exige as travas)\n')
+
+    # ------------------------------------------------------------ estado
+    def _zerar_estado(self):
+        self.votos = defaultdict(Counter)
+        self.visto, self.primeiro, self.travado, self.suave = Counter(), {}, {}, {}
+        # Contagem ACUMULADA: numa jornada de 14-16 h passam ~3 milhões de
+        # grãos, e os dicionários acima são por track. Quando o track sai de
+        # quadro o veredito dele é dobrado aqui e as entradas são liberadas.
+        self.contagem = Counter()
+        self.tracker = IoUTracker(compensar=not self.args.parado)
+        self.t_inicio = time.time()
+        self.prox_laudo = time.time() + self.args.laudo_seg
+
+    def distribuicao(self):
+        return self.contagem + Counter(self.travado.values())
+
+    def janelas_de(self, quadro):
+        """Janelas que o modelo come, em coordenadas do quadro: é o que o
+        gravador salva, para o dataset ter a MESMA escala da inferência."""
+        h, w = quadro.shape[:2]
+        if (h, w) not in self._janelas_cache:
+            if self.args.tiles <= 1:
+                self._janelas_cache[(h, w)] = [(0, 0, w, h)]
+            else:
+                self._janelas_cache[(h, w)] = [
+                    (dx, dy, t.shape[1], t.shape[0]) for t, dx, dy in
+                    crop_tiles(quadro, self.args.roi or self.modelo.W,
+                               self.args.tiles, self.sobrepor)]
+        return self._janelas_cache[(h, w)]
+
+    # ------------------------------------------------------------ dataset
+    def _abrir_gravador(self, lote):
+        a = self.args
+        if not (self.no_padrao or a.dataset) or a.sem_dataset:
+            self.log('dataset : desligado (--sem-dataset)' if a.sem_dataset else
+                     'dataset : desligado — fonte fora do padrão do rig '
+                     '(--dataset grava mesmo assim)')
+            return None
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import gravador_dataset as gd
+        if gd.CLASSES != NAMES:
+            raise RuntimeError(f'classes divergentes: gravador {gd.CLASSES} x app {NAMES}')
+        try:
+            g = gd.GravadorDataset(
+                raiz=a.dataset_dir or gd.RAIZ_PADRAO, lote=lote or a.lote,
+                passo=a.dataset_passo, max_graos=a.dataset_graos,
+                min_livre_gb=a.dataset_min_livre, travas=self.no_padrao,
+                bloco_s=a.dataset_bloco, guarda_s=a.dataset_guarda,
+                meta={'engine': os.path.basename(a.engine), 'camera': str(self.fonte),
+                      'conf': a.conf, 'roi': a.roi, 'tiles': a.tiles,
+                      'sobrepor_px': self.sobrepor, 'esteira': bool(a.esteira),
+                      'parado': bool(a.parado), 'rotate': a.rotate,
+                      'class_offset': self.modelo.offset})
+        except OSError as e:     # disco sem permissão ou cheio: inspeciona sem gravar
+            self.log(f'dataset : não consegui criar as pastas ({e}) — inspeção sem gravação')
+            return None
+        self.log(g.cabecalho())
+        return g
+
+    def _proposta(self, tid):
+        """Classe e confiança atuais de um grão, travado ou não."""
+        cnt = self.votos.get(tid)
+        if not cnt:
+            return None, None
+        cls = self.travado.get(tid) or veredito(cnt)
+        return cls, cnt[cls] / max(sum(cnt.values()), 1e-9)
+
+    def _descarregar_vivos(self):
+        """Grava o recorte de todo grão ainda em quadro (fim ou reset)."""
+        for tid in list(self.visto):
+            cls, cf = self._proposta(tid)
+            self.gravador.aposentar(tid, cls, cf, self.visto.get(tid))
+
+    def _fechar_gravador(self):
+        if self.gravador is None:
+            return None
+        g, self.gravador = self.gravador, None
+        self.ultimo_dataset = fechar_dataset(g, lambda: None)
+        if self.ultimo_dataset is not None:
+            self.ultimo_dataset = dict(self.ultimo_dataset, revisar=g.dir_r)
+        return self.ultimo_dataset
+
+    # ------------------------------------------------------------ lote
+    def iniciar_lote(self, lote=None):
+        """Zera a contagem e abre a sessão de dataset deste lote."""
+        with self.trava:
+            if self.gravador:
+                self._descarregar_vivos()
+                self._fechar_gravador()
+            self._zerar_estado()
+            self.lote = lote
+            self.gravador = self._abrir_gravador(lote)
+
+    def encerrar_lote(self, extra='final'):
+        """Fecha o lote: devolve o laudo e fecha a sessão de dataset."""
+        with self.trava:
+            laudo = self.laudo(extra)
+            if self.gravador:
+                self._descarregar_vivos()
+            laudo['dataset'] = self._fechar_gravador()
+            self.lote = None
+            return laudo
+
+    def zerar(self):
+        """Tecla c: zera a contagem, mantém o lote e a sessão de dataset."""
+        with self.trava:
+            if self.gravador:
+                self._descarregar_vivos()
+                self.gravador.nova_epoca()
+            self._zerar_estado()
+
+    def laudo(self, extra=''):
+        with self.trava:
+            l = montar_laudo(self.distribuicao(), self.t_inicio, self.fps, self.args, extra)
+            l['lote'] = self.lote
+            l['tempos_ms'] = self.tempos_medios()
+            return l
+
+    # ------------------------------------------------------------ medição
+    def _medir(self, etapas):
+        primeiro = self._n == 0
+        self._n += 1
+        for e, v in etapas.items():
+            self._soma[e] += v
+            self.tempos[e] = v if primeiro else 0.9 * self.tempos[e] + 0.1 * v
+
+    def tempos_medios(self):
+        n = max(self._n, 1)
+        return {e: round(self._soma[e] / n, 2) for e in ETAPAS}
+
+    def estado(self):
+        with self.trava:
+            d = self.distribuicao()
+            total = sum(d.values())
+            premium = d.get('intact', 0)
+            dur = time.time() - self.t_inicio
+            return {
+                'lote': self.lote, 'graos': total, 'premium': premium,
+                'nao_premium': total - premium,
+                'premium_pct': round(100 * premium / total, 1) if total else 0.0,
+                'por_classe': {c: d.get(c, 0) for c in NAMES},
+                'no_quadro': self.n_dets, 'fps': round(self.fps, 1),
+                'ms': round(self.ms, 1), 'duracao_s': round(dur, 1),
+                'massa_kg': round(total * MASSA_GRAO_G / 1000, 3),
+                'vazao_kg_h': round(total * MASSA_GRAO_G / 1000 * 3600 / dur, 2) if dur > 0 else 0.0,
+                'tempos_ms': {e: round(v, 1) for e, v in self.tempos.items()},
+                'dataset': self.gravador.hud() if self.gravador else None,
+            }
+
+    def ultimo_quadro(self):
+        return self._ultimo
+
+    def ultimo_quadro_jpeg(self, qualidade=70, largura_max=960):
+        """JPEG do último quadro anotado, reduzido para caber no celular."""
+        q = self._ultimo
+        if q is None:
+            return None
+        h, w = q.shape[:2]
+        if w > largura_max:
+            q = cv2.resize(q, (largura_max, int(h * largura_max / w)),
+                           interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode('.jpg', q, [cv2.IMWRITE_JPEG_QUALITY, qualidade])
+        return buf.tobytes() if ok else None
+
+    # ------------------------------------------------------------ o laço
+    def passo(self):
+        """Uma varredura. False quando a fonte acabou (ou a câmera caiu)."""
+        t0 = time.perf_counter()
+        ok, frame = self.cap.read()
+        if not ok or frame is None:
+            return False
+        frame = enquadrar(frame, self.args)
+        captura = (time.perf_counter() - t0) * 1000
+        with self.trava:
+            self._processar(frame, captura)
+        return True
+
+    def _processar(self, frame, captura_ms):
+        a = self.args
+        tm = getattr(self.modelo, 'tempos', None)
+        if isinstance(tm, dict):
+            tm['pre'] = tm['gpu'] = 0.0
+        t0 = time.perf_counter()
+        dets = detectar(self.modelo, frame, a, self.sobrepor)
+        t1 = time.perf_counter()
+        self.ms = (t1 - t0) * 1000
+        pre, gpu = (tm['pre'], tm['gpu']) if isinstance(tm, dict) else (0.0, self.ms)
+        agora = time.time()
+
+        rastreados = self.tracker.update(dets)
+        t2 = time.perf_counter()
+        if self.gravador:
+            # ANTES de desenhar: o recorte de um grão não pode levar a caixa já
+            # pintada no vizinho
+            self.gravador.observar(frame, rastreados, self.janelas_de(frame))
+        t3 = time.perf_counter()
+
+        votos, visto, travado, suave = self.votos, self.visto, self.travado, self.suave
+        for tid, x1, y1, x2, y2, cls_i, cf in rastreados:
+            nome = NAMES[cls_i] if 0 <= cls_i < len(NAMES) else 'intact'
+            votos[tid][nome] += cf
+            visto[tid] += 1
+            self.primeiro.setdefault(tid, agora)
+            # trava a classe só depois de observar o suficiente
+            if (tid not in travado and visto[tid] >= LOCK_MIN_FRAMES
+                    and agora - self.primeiro[tid] >= a.hold):
+                travado[tid] = veredito(votos[tid])
+            if visto[tid] < MIN_DRAW_FRAMES:
+                continue
+            if tid in suave:            # EMA: caixa não treme
+                px1, py1, px2, py2 = suave[tid]
+                x1 = int(SMOOTH * x1 + (1 - SMOOTH) * px1)
+                y1 = int(SMOOTH * y1 + (1 - SMOOTH) * py1)
+                x2 = int(SMOOTH * x2 + (1 - SMOOTH) * px2)
+                y2 = int(SMOOTH * y2 + (1 - SMOOTH) * py2)
+            suave[tid] = (x1, y1, x2, y2)
+            cls = travado.get(tid)
+            cor = COLORS[cls] if cls else (160, 160, 160)
+            rot = PT_LABEL[cls] if cls else 'analisando...'
+            cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
+            cv2.putText(frame, rot, (x1, max(16, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, cor, 2)
+
+        # aposenta os tracks que saíram: dobra o veredito no acumulado e libera
+        # as entradas por track (ver `contagem`)
+        for tid in self.tracker.aposentados:
+            cls = travado.pop(tid, None)
+            if cls is None and visto.get(tid, 0) >= MIN_DRAW_FRAMES and votos[tid]:
+                cls = veredito(votos[tid])   # saiu antes de travar: usa o voto
+            if cls:
+                self.contagem[cls] += 1
+            if self.gravador:
+                # grão visto poucas vezes não entra na contagem, mas se está numa
+                # imagem salva precisa de rótulo: vai para a pasta do voto, e a
+                # revisão decide (inclusive descartar)
+                cnt = votos.get(tid)
+                prop = cls or (veredito(cnt) if cnt else None)
+                self.gravador.aposentar(
+                    tid, prop,
+                    cnt[prop] / max(sum(cnt.values()), 1e-9) if prop and cnt else None,
+                    visto.get(tid))
+            votos.pop(tid, None); visto.pop(tid, None)
+            self.primeiro.pop(tid, None); suave.pop(tid, None)
+
+        now = time.time()
+        self.fps = 0.9 * self.fps + 0.1 * (1.0 / max(now - self._t_prev, 1e-6))
+        self._t_prev = now
+        self.n_dets = len(dets)
+
+        if a.laudo and now >= self.prox_laudo:
+            escrever_laudo(a.laudo, self.distribuicao(), self.t_inicio, self.fps, a, 'parcial')
+            self.prox_laudo = now + a.laudo_seg
+
+        dist = self.distribuicao()
+        bons = dist.get('intact', 0)
+        ruins = sum(v for k, v in dist.items() if k != 'intact')
+        hud = (f'{len(dets)} graos  |  Premium {bons}  Expulso {ruins}  |  '
+               f'{self.fps:.0f} fps  {self.ms:.0f} ms'
+               + (f'  |  {self.gravador.hud()}' if self.gravador else ''))
+        linhas = [hud]
+        if a.tempos:
+            linhas.append('  '.join(f'{e} {self.tempos[e]:.1f}' for e in ETAPAS) + ' ms')
+        for i, txt in enumerate(linhas):
+            y = 26 + 24 * i
+            cv2.putText(frame, txt, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+            cv2.putText(frame, txt, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+        if a.out:
+            if self.writer is None:
+                h, w = frame.shape[:2]
+                self.writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*'mp4v'),
+                                              self.cap.get(cv2.CAP_PROP_FPS) or 30, (w, h))
+            self.writer.write(frame)
+        t4 = time.perf_counter()
+
+        self._medir({'captura': captura_ms, 'pre': pre, 'gpu': gpu,
+                     'pos': max(0.0, self.ms - pre - gpu),
+                     'tracker': (t2 - t1) * 1000, 'gravador': (t3 - t2) * 1000,
+                     'votos': (t4 - t3) * 1000})
+        self._ultimo = frame
+
+    def fechar(self):
+        """Fecha o lote aberto (se houver), a câmera e o vídeo."""
+        with self.trava:
+            if self.gravador:
+                self._descarregar_vivos()
+                self._fechar_gravador()
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            if self.writer:
+                self.writer.release()
+                self.writer = None
+                self.log(f'salvo: {self.args.out}')
+
+
+def imprimir_tempos(tempos):
+    total = sum(tempos.values())
+    if not total:
+        return
+    print('\n=== tempo por etapa (média da sessão, ms por varredura) ===')
+    for e in ETAPAS:
+        v = tempos[e]
+        print(f'  {e:9s} {v:7.2f}  {"#" * int(40 * v / total)}')
+    print(f'  {"total":9s} {total:7.2f}  -> teto de {1000 / total:.1f} varreduras/s')
+
+
+def main(argv=None):
+    args = criar_parser().parse_args(argv)
+    try:
+        insp = Inspecao(args)
+    except FonteSemQuadro as e:
+        sys.exit(str(e))
 
     # ---- modo diagnóstico: descobre onde estão as classes de verdade ----
     if args.diag:
         print(f'\ndiagnóstico: {args.diag} frames…')
-        frame = quadro0
+        frame = insp.quadro0
         for i in range(args.diag):
             if i:
-                ok, frame = cap.read()
+                ok, frame = insp.cap.read()
                 if not ok:
                     break
-            detectar(modelo, enquadrar(frame, args), args, sobrepor)
-        cap.release()
+            detectar(insp.modelo, enquadrar(frame, args), args, insp.sobrepor)
+        insp.cap.release()
         print('\n=== onde as classes realmente estão ===')
-        print(modelo.diagnostico_classes())
+        print(insp.modelo.diagnostico_classes())
         print('\nComo ler: a coluna com MAIS detecções deve ser a classe mais comum')
         print('no seu vídeo (normalmente `intact`). Se a coluna campeã não estiver')
         print('caindo em `intact` na tabela acima, ajuste --class-offset:')
         print('  --class-offset 0  -> coluna extra fica no FIM   (col 0 = broken)')
         print('  --class-offset 1  -> coluna extra fica na FRENTE (col 1 = broken)')
         return
-    print(f'fonte: {fonte} | q sai · c zera · p pausa')
+    print(f'fonte: {insp.fonte} | q sai · c zera · p pausa')
+    insp.iniciar_lote(args.lote)
 
-    # ---- dataset: inspecionar no padrão do rig já é coletar ----
-    # Só a CSI com exposição travada é o domínio do dataset (PADRAO_CAPTURA.md):
-    # celular, vídeo e AE/AWB automático gravariam outro domínio, que depois
-    # teria de ser separado à mão. Por isso o automático vale só no rig.
-    no_padrao = (str(args.camera).startswith('csi') and not args.csi_sem_trava
-                 and not args.source)
-    gravador = None
-    if (no_padrao or args.dataset) and not args.sem_dataset:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import gravador_dataset as gd
-        if gd.CLASSES != NAMES:
-            sys.exit(f'classes divergentes: gravador {gd.CLASSES} x app {NAMES}')
-        gravador = gd.GravadorDataset(
-            raiz=args.dataset_dir or gd.RAIZ_PADRAO, lote=args.lote,
-            passo=args.dataset_passo, max_graos=args.dataset_graos,
-            min_livre_gb=args.dataset_min_livre, travas=no_padrao,
-            bloco_s=args.dataset_bloco, guarda_s=args.dataset_guarda,
-            meta={'engine': os.path.basename(args.engine), 'camera': str(fonte),
-                  'conf': args.conf, 'roi': args.roi, 'tiles': args.tiles,
-                  'sobrepor_px': sobrepor, 'esteira': bool(args.esteira),
-                  'parado': bool(args.parado), 'rotate': args.rotate,
-                  'class_offset': modelo.offset})
-        print(gravador.cabecalho())
-    elif args.sem_dataset:
-        print('dataset : desligado (--sem-dataset)')
-    else:
-        print('dataset : desligado — fonte fora do padrão do rig '
-              '(--dataset grava mesmo assim)')
-
-    # janelas que o modelo come, em coordenadas do quadro: é o que o gravador
-    # salva como imagem, para o dataset ter a MESMA escala da inferência
-    _janelas_cache = {}
-
-    def janelas_de(quadro):
-        h, w = quadro.shape[:2]
-        if (h, w) not in _janelas_cache:
-            if args.tiles <= 1:
-                _janelas_cache[(h, w)] = [(0, 0, w, h)]
-            else:
-                _janelas_cache[(h, w)] = [
-                    (dx, dy, t.shape[1], t.shape[0]) for t, dx, dy in
-                    crop_tiles(quadro, args.roi or modelo.W, args.tiles, sobrepor)]
-        return _janelas_cache[(h, w)]
-
-    def proposta_de(tid):
-        """Classe e confiança atuais de um grão, travado ou não."""
-        cnt = votos.get(tid)
-        if not cnt:
-            return None, None
-        cls = travado.get(tid) or veredito(cnt)
-        return cls, cnt[cls] / max(sum(cnt.values()), 1e-9)
-
-    def descarregar_vivos():
-        """Grava o recorte de todo grão ainda em quadro (fim ou reset)."""
-        for tid in list(visto):
-            cls, cf = proposta_de(tid)
-            gravador.aposentar(tid, cls, cf, visto.get(tid))
-
-    votos = defaultdict(Counter)
-    visto, primeiro, travado, suave = Counter(), {}, {}, {}
-    # Contagem ACUMULADA: numa jornada de 14-16 h passam ~3 milhões de grãos, e
-    # os dicionários acima são por track. Quando o track sai de quadro o verdito
-    # dele é dobrado aqui e as entradas são liberadas — senão a memória cresce
-    # linearmente com a produção do dia.
-    contagem = Counter()
-    writer = None
-    t_inicio, prox_laudo = time.time(), time.time() + args.laudo_seg
-    fps, t_prev, pausado = 0.0, time.time(), False
     win = 'Vigil.ia Jetson (q sai)'
     if not args.no_window:
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
         if args.tela_cheia:
             cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
+    pausado = False
+    laudo = None
     try:
         while True:
-            if not pausado:
-                ok, frame = cap.read()
-                if not ok:
-                    print('fim da fonte.')
-                    break
-                frame = enquadrar(frame, args)
-
-                t0 = time.time()
-                dets = detectar(modelo, frame, args, sobrepor)
-                ms = (time.time() - t0) * 1000
-                agora = time.time()
-
-                rastreados = tracker.update(dets)
-                if gravador:
-                    # ANTES de desenhar: o recorte de um grão não pode levar a
-                    # caixa já pintada no vizinho
-                    gravador.observar(frame, rastreados, janelas_de(frame))
-                for tid, x1, y1, x2, y2, cls_i, cf in rastreados:
-                    nome = NAMES[cls_i] if 0 <= cls_i < len(NAMES) else 'intact'
-                    votos[tid][nome] += cf
-                    visto[tid] += 1
-                    primeiro.setdefault(tid, agora)
-                    # trava a classe só depois de observar o suficiente
-                    if (tid not in travado and visto[tid] >= LOCK_MIN_FRAMES
-                            and agora - primeiro[tid] >= args.hold):
-                        travado[tid] = veredito(votos[tid])
-                    if visto[tid] < MIN_DRAW_FRAMES:
-                        continue
-                    if tid in suave:            # EMA: caixa não treme
-                        px1, py1, px2, py2 = suave[tid]
-                        x1 = int(SMOOTH * x1 + (1 - SMOOTH) * px1)
-                        y1 = int(SMOOTH * y1 + (1 - SMOOTH) * py1)
-                        x2 = int(SMOOTH * x2 + (1 - SMOOTH) * px2)
-                        y2 = int(SMOOTH * y2 + (1 - SMOOTH) * py2)
-                    suave[tid] = (x1, y1, x2, y2)
-                    cls = travado.get(tid)
-                    cor = COLORS[cls] if cls else (160, 160, 160)
-                    rot = PT_LABEL[cls] if cls else 'analisando...'
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
-                    cv2.putText(frame, rot, (x1, max(16, y1 - 6)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, cor, 2)
-
-                # aposenta os tracks que saíram: dobra o verdito no acumulado e
-                # libera as entradas por track (ver `contagem`, acima)
-                for tid in tracker.aposentados:
-                    cls = travado.pop(tid, None)
-                    if cls is None and visto.get(tid, 0) >= MIN_DRAW_FRAMES and votos[tid]:
-                        cls = veredito(votos[tid])   # saiu antes de travar: usa o voto
-                    if cls:
-                        contagem[cls] += 1
-                    if gravador:
-                        # grão visto poucas vezes não entra na contagem, mas se
-                        # está numa imagem salva precisa de rótulo: vai para a
-                        # pasta do voto, e a revisão decide (inclusive descartar)
-                        cnt = votos.get(tid)
-                        prop = cls or (veredito(cnt) if cnt else None)
-                        gravador.aposentar(
-                            tid, prop,
-                            cnt[prop] / max(sum(cnt.values()), 1e-9) if prop and cnt else None,
-                            visto.get(tid))
-                    votos.pop(tid, None); visto.pop(tid, None)
-                    primeiro.pop(tid, None); suave.pop(tid, None)
-
-                now = time.time()
-                fps = 0.9 * fps + 0.1 * (1.0 / max(now - t_prev, 1e-6))
-                t_prev = now
-
-                if args.laudo and now >= prox_laudo:
-                    escrever_laudo(args.laudo, contagem + Counter(travado.values()),
-                                   t_inicio, fps, args, 'parcial')
-                    prox_laudo = now + args.laudo_seg
-
-                dist = contagem + Counter(travado.values())
-                bons = dist.get('intact', 0)
-                ruins = sum(v for k, v in dist.items() if k != 'intact')
-                hud = (f'{len(dets)} graos  |  Premium {bons}  Expulso {ruins}  |  '
-                       f'{fps:.0f} fps  {ms:.0f} ms'
-                       + (f'  |  {gravador.hud()}' if gravador else ''))
-                cv2.putText(frame, hud, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
-                cv2.putText(frame, hud, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-
-                if args.out:
-                    if writer is None:
-                        h, w = frame.shape[:2]
-                        writer = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*'mp4v'),
-                                                 cap.get(cv2.CAP_PROP_FPS) or 30, (w, h))
-                    writer.write(frame)
-
+            if not pausado and not insp.passo():
+                print('fim da fonte.')
+                break
             if not args.no_window:
-                cv2.imshow(win, frame)
+                cv2.imshow(win, insp.ultimo_quadro())
                 k = cv2.waitKey(1) & 0xFF
                 if k == ord('q'):
                     break
                 if k == ord('p'):
                     pausado = not pausado
                 if k == ord('c'):
-                    if gravador:
-                        descarregar_vivos()
-                        gravador.nova_epoca()
-                    votos.clear(); visto.clear(); primeiro.clear()
-                    travado.clear(); suave.clear(); contagem.clear()
-                    tracker = IoUTracker(compensar=not args.parado)
-                    t_inicio = time.time()
+                    insp.zerar()
                     print('contagem zerada')
     finally:
-        cap.release()
-        if writer:
-            writer.release()
-            print('salvo:', args.out)
-        if gravador:
-            fechar_dataset(gravador, descarregar_vivos)
-        if not args.no_window:
-            cv2.destroyAllWindows()
+        try:
+            laudo = insp.encerrar_lote()
+        finally:
+            insp.fechar()
+            if not args.no_window:
+                cv2.destroyAllWindows()
 
-    dist = contagem + Counter(travado.values())
+    dist = laudo['por_classe']
     print('\n=== veredito final ===')
     for c in NAMES:
         print(f'  {PT_LABEL[c]:14s} {dist.get(c, 0)}')
-    total = sum(dist.values())
+    total = laudo['graos']
     if total:
-        print(f'  Premium: {dist.get("intact", 0)}/{total} '
-              f'({100 * dist.get("intact", 0) / total:.0f}%)')
+        print(f'  Premium: {laudo["premium"]}/{total} '
+              f'({100 * laudo["premium"] / total:.0f}%)')
+    imprimir_tempos(laudo['tempos_ms'])
     if args.laudo:
-        laudo = escrever_laudo(args.laudo, dist, t_inicio, fps, args, 'final')
+        gravar_json(args.laudo, laudo)
         print(f'\nlaudo: {args.laudo}')
         print(f'  {laudo["graos"]} grãos, {laudo["premium_pct"]:.1f}% premium, '
               f'~{laudo["massa_estimada_kg"]:.3f} kg, {laudo["vazao_kg_h"]:.1f} kg/h')

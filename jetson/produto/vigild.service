@@ -1,0 +1,20 @@
+# Vígil.ia — serviço do aparelho. Instale com: sudo ./produto/instalar_servico.sh
+[Unit]
+Description=Vigil.ia - inspecao de soja (aparelho)
+After=network-online.target nvargus-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USUARIO__
+WorkingDirectory=__JETSON__
+ExecStart=/usr/bin/python3 __JETSON__/produto/vigild.py
+Restart=always
+RestartSec=3
+# SIGTERM -> encerra o lote aberto com laudo; dá tempo de esvaziar a fila do dataset
+TimeoutStopSec=60
+KillSignal=SIGTERM
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

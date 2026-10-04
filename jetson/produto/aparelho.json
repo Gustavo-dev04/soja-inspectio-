@@ -1,0 +1,13 @@
+{
+  "_comentario": "Configuração do rig. Caminhos relativos valem a partir desta pasta. Troque a engine pela do Large (704) quando ela existir. Ver DOCUMENTACAO.md §4.6.",
+  "nome": "Vígil.ia — rig 1",
+  "porta": 8080,
+  "banco": "vigil.db",
+  "engine": "../soja_rfdetr_small_CAMPEAO_fp16.engine",
+  "camera": "csi:1",
+  "roi": 704,
+  "tiles": 2,
+  "esteira": true,
+  "conf": 0.35,
+  "dataset_graos": 2000
+}

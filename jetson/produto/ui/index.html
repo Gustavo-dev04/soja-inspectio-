@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vígil.ia — aparelho</title>
+<link rel="stylesheet" href="/ui/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <div class="marca">Vígil<span>.ia</span></div>
+  <div class="status">
+    <span id="st-camera" class="pilula">câmera</span>
+    <span id="st-rec" class="pilula" hidden>REC</span>
+    <span id="st-conexao" class="pilula">conectando…</span>
+  </div>
+</header>
+
+<main>
+  <section class="video">
+    <img id="aovivo" src="/ao-vivo.mjpg" alt="vídeo ao vivo da câmara de inspeção">
+  </section>
+
+  <section class="numeros">
+    <div class="destaque">
+      <div class="rotulo">Premium</div>
+      <div id="n-premium-pct" class="grande">—</div>
+    </div>
+    <div class="par">
+      <div><div class="rotulo">Grãos</div><div id="n-graos" class="medio">0</div></div>
+      <div><div class="rotulo">Premium</div><div id="n-premium" class="medio ok">0</div></div>
+      <div><div class="rotulo">Não premium</div><div id="n-nao" class="medio ruim">0</div></div>
+    </div>
+    <div id="classes" class="classes"></div>
+    <div class="linha-fina">
+      <span id="n-kg">0 kg</span> · <span id="n-kgh">0 kg/h</span> · <span id="n-tempo">00:00</span>
+    </div>
+  </section>
+
+  <section class="cartao" id="painel-lote">
+    <!-- preenchido pelo script: formulário de novo lote OU lote em andamento -->
+  </section>
+
+  <section class="cartao">
+    <h2>Lotes recentes</h2>
+    <ul id="lotes" class="lista"></ul>
+  </section>
+
+  <details class="cartao tecnico">
+    <summary>Técnico</summary>
+    <div id="tecnico"></div>
+    <h3>Registro do aparelho</h3>
+    <ul id="registro" class="lista pequena"></ul>
+  </details>
+</main>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

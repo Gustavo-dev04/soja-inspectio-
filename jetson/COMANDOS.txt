@@ -256,6 +256,35 @@ python3 coletar_dataset.py --exportar
 python3 coletar_dataset.py --engine SUA_ENGINE.engine --camera csi:1 --roi 704 --tiles 2
 
 --------------------------------------------------------------------------------
+ 7e. O APARELHO  (operador no celular, sem terminal)
+--------------------------------------------------------------------------------
+
+# 1. uma vez: ajuste a engine e a câmera do rig
+nano produto/aparelho.json
+
+# 2. testar na mão (Ctrl+C encerra o lote aberto com laudo)
+python3 produto/vigild.py
+
+# 3. instalar como serviço: sobe no boot, reinicia se cair
+sudo ./produto/instalar_servico.sh
+
+ No celular/tablet, na MESMA rede:   http://IP_DO_JETSON:8080
+   novo lote -> iniciar -> acompanhar ao vivo -> encerrar -> laudo (vira PDF)
+
+# o dia a dia do serviço
+journalctl -u vigild -f            # logs ao vivo
+sudo systemctl restart vigild      # reiniciar
+sudo systemctl stop vigild         # parar (encerra o lote aberto com laudo)
+sudo ./produto/instalar_servico.sh --remover
+
+ Laudos e lotes ficam em produto/vigil.db (SQLite). Faça cópia dele.
+
+ Tempo de cada etapa da varredura (onde vale otimizar):
+python3 vigil_jetson.py --engine SUA_ENGINE.engine --camera csi:1 --roi 704 \
+  --tiles 2 --esteira --tempos
+   (o resumo também sai no fim de toda execução)
+
+--------------------------------------------------------------------------------
  7d. MODO DE ENERGIA E ESCOLHA DE BACKBONE
 --------------------------------------------------------------------------------
 

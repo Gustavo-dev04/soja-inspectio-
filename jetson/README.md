@@ -232,6 +232,13 @@ equivalente do `deck/vigil_deck.py`, mas consumindo a `.engine` via TensorRT em
 vez do `.pt` via ultralytics, mantendo a mesma regra de **voto exigente por
 classe** e **veredito travado por grão**. Para o rig com esteira, ver §4a.
 
+### O aparelho (operador no celular)
+
+`produto/vigild.py` roda a inspeção como serviço e serve uma página em
+`http://<ip-do-jetson>:8080`: novo lote, acompanhar ao vivo, encerrar, laudo
+imprimível. Configuração em `produto/aparelho.json`; instalação com
+`sudo ./produto/instalar_servico.sh`. Detalhes em `../DOCUMENTACAO.md` §4.6.
+
 ### Dataset automático
 
 No padrão do rig (CSI com exposição travada), **inspecionar já é coletar**: o
