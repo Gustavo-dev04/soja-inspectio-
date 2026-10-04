@@ -45,3 +45,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Banco local do aparelho (laudos e lotes ficam no Jetson, não no git)
+jetson/produto/vigil.db*

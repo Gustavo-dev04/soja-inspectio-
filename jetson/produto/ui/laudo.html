@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laudo — Vígil.ia</title>
+<style>
+  :root { --texto: #1d2420; --suave: #5e6863; --linha: #d9d6cc; --ok: #2f8a4c; --ruim: #b8452e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ecebe5; color: var(--texto);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; }
+  .folha { max-width: 760px; margin: 0 auto; background: #fff; padding: 32px 36px;
+           border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  header { display: flex; justify-content: space-between; align-items: baseline;
+           border-bottom: 2px solid var(--texto); padding-bottom: 10px; gap: 12px; flex-wrap: wrap; }
+  .marca { font-weight: 800; font-size: 22px; } .marca span { color: var(--ok); }
+  h1 { font-size: 18px; margin: 0; }
+  .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+           gap: 8px 18px; margin: 18px 0; }
+  .grade div small { display: block; color: var(--suave); font-size: 11px;
+                     text-transform: uppercase; letter-spacing: .5px; }
+  .resultado { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center;
+               border: 1px solid var(--linha); border-radius: 6px; margin: 8px 0 20px; }
+  .resultado div { padding: 12px 6px; } .resultado div + div { border-left: 1px solid var(--linha); }
+  .resultado b { display: block; font-size: 28px; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 4px; border-bottom: 1px solid var(--linha); }
+  th:not(:first-child), td:not(:first-child) { text-align: right; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .6px; margin: 22px 0 6px; }
+  .rodape { margin-top: 26px; font-size: 12px; color: var(--suave); }
+  .verif { font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+  .aviso { background: #fff4e5; border: 1px solid #f0c27b; padding: 8px 10px; border-radius: 6px;
+           margin-top: 14px; font-size: 13px; }
+  .acoes { max-width: 760px; margin: 0 auto 12px; display: flex; gap: 8px; }
+  .acoes a, .acoes button { font: inherit; font-weight: 700; padding: 10px 14px; border-radius: 8px;
+           border: 0; background: #3b6e4a; color: #fff; text-decoration: none; cursor: pointer; }
+  .acoes a { background: #fff; color: var(--texto); border: 1px solid var(--linha); }
+  @media (max-width: 520px) { .folha { padding: 20px 16px; } .resultado b { font-size: 22px; } }
+  @media print { body { background: #fff; padding: 0; } .acoes { display: none; }
+                 .folha { box-shadow: none; max-width: none; padding: 0; } }
+</style>
+</head>
+<body>
+<div class="acoes"><a href="/">← aparelho</a><button onclick="print()">Imprimir / salvar PDF</button></div>
+<article class="folha" id="folha"><p>carregando laudo…</p></article>
+<script>
+'use strict';
+const CLASSES = [['intact', 'Intacto'], ['immature', 'Imaturo'], ['broken', 'Quebrado'],
+                 ['skin-damaged', 'Casca danificada'], ['spotted', 'Manchado']];
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const num = (v, d = 0) => Number(v || 0).toLocaleString('pt-BR',
+  { minimumFractionDigits: d, maximumFractionDigits: d });
+const dur = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h} h ${m} min` : `${m} min ${s % 60} s`; };
+
+(async () => {
+  const id = location.pathname.split('/').pop();
+  const r = await fetch(`/api/laudos/${id}`);
+  const folha = document.getElementById('folha');
+  if (!r.ok) { folha.innerHTML = '<p>Laudo não encontrado.</p>'; return; }
+  const L = await r.json(), d = L.dados, lote = L.lote || {};
+  document.title = `Laudo ${d.lote_codigo || ''} — Vígil.ia`;
+  const total = d.graos || 0;
+  const linhas = CLASSES.map(([k, nome]) => {
+    const n = (d.por_classe || {})[k] || 0;
+    return `<tr><td>${nome}${k === 'intact' ? ' <small>(premium)</small>' : ''}</td>
+      <td>${num(n)}</td><td>${total ? num(100 * n / total, 1) : '0,0'}%</td></tr>`;
+  }).join('');
+  const quando = (d.emitido_em || L.criado_em || '').replace('T', ' ').slice(0, 16);
+  folha.innerHTML = `
+    <header><div class="marca">Vígil<span>.ia</span></div>
+      <h1>Laudo de classificação de soja</h1></header>
+    <div class="grade">
+      <div><small>Lote</small><b>${esc(d.lote_codigo || lote.codigo)}</b></div>
+      <div><small>Produtor</small>${esc(lote.produtor) || '—'}</div>
+      <div><small>Variedade</small>${esc(lote.variedade) || '—'}</div>
+      <div><small>Emitido em</small>${esc(quando)}</div>
+      <div><small>Duração da inspeção</small>${dur(d.duracao_s)}</div>
+      <div><small>Amostra declarada</small>${d.amostra_declarada_kg ? num(d.amostra_declarada_kg, 3) + ' kg' : '—'}</div>
+    </div>
+    <div class="resultado">
+      <div>Grãos inspecionados<b>${num(total)}</b></div>
+      <div>Premium<b style="color:var(--ok)">${num(d.premium_pct, 1)}%</b></div>
+      <div>Não premium<b style="color:var(--ruim)">${num(d.nao_premium)}</b></div>
+    </div>
+    <h2>Classificação por grão</h2>
+    <table><thead><tr><th>Classe</th><th>Grãos</th><th>%</th></tr></thead>
+      <tbody>${linhas}</tbody></table>
+    <h2>Produção</h2>
+    <table><tbody>
+      <tr><td>Massa estimada (${num((d.config || {}).massa_grao_g * 1000)} mg/grão)</td><td>${num(d.massa_estimada_kg, 3)} kg</td></tr>
+      <tr><td>Vazão média</td><td>${num(d.vazao_kg_h, 1)} kg/h · ${num(d.graos_por_s, 1)} grãos/s</td></tr>
+    </tbody></table>
+    ${d.obs && d.obs !== 'final' ? `<div class="aviso">${esc(d.obs)}</div>` : ''}
+    ${lote.obs ? `<div class="aviso">Observação do operador: ${esc(lote.obs)}</div>` : ''}
+    <div class="rodape">
+      Aparelho ${esc(d.aparelho_id)} · modelo ${esc(d.modelo)} · laudo ${esc(d.laudo_id)}<br>
+      Código de verificação (SHA-256 do laudo):
+      <span class="verif">${esc(L.verificacao)}</span>
+      ${L.integro ? '' : '<div class="aviso"><b>ATENÇÃO:</b> o conteúdo não confere com o código de verificação.</div>'}
+      <br>Massa estimada pela contagem de grãos; não substitui pesagem.
+    </div>`;
+})();
+</script>
+</body>
+</html>
